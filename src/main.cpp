@@ -61,15 +61,17 @@ void loop() {
     // Xử lý dữ liệu UART từ PIC
     handleUARTData();
     valuetouch = getValue();
-    Serial.println(valuetouch);
-    
-    // Gửi touch value qua UDP đến server
-    sendTouchValue(valuetouch);
-    
-    delay(100); // Tránh spam quá nhiều
+    // Serial.println("value: " + String(valuetouch));
+    int threshold = getThreshold();
+    Serial.println("threshold: " + String(threshold));
     // touchActive = isTouchActive();
     // touchDuration = getTouchDuration();
     // Serial.printf("Touch Active: %s, Duration: %lu ms\n", touchActive ? "YES" : "NO", touchDuration);
+    
+    // Gửi touch value qua UDP đến server
+    // sendTouchValue(valuetouch);
+    // delay(100); // Tránh spam quá nhiều
+
     // delay(1000);
     // sendResolumeInit();
     // delay(1000);
@@ -79,4 +81,10 @@ void loop() {
     // delay(1000);
     // sendResolumeMain();
     // delay(5000);
+
+    
+   
+    
+    sendUARTCommand("E");
+    delay(3000);
 }

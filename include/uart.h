@@ -9,7 +9,7 @@
 // UART pins
 #define UART_RX_PIN 33  // RX pin (nhận dữ liệu từ PIC)
 #define UART_TX_PIN 26  // TX pin (gửi dữ liệu đến PIC)
-#define UART_BAUD 9600  // Baud rate
+#define UART_BAUD 115200  // Baud rate
 #define UART_PORT 2     // UART2 (ESP32 có 3 UART: 0, 1, 2)
 
 // Buffer sizes
@@ -127,5 +127,10 @@ unsigned long getTouchStartTime();
  * @brief Xử lý lệnh UART trong loop
  */
 void clearTouchReleased();
+
+/**
+ * @brief Gửi lệnh đến PIC qua UART
+ */
+void sendUARTCommand(const String& command);
 
 #endif // UART_H

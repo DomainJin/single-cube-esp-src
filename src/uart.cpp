@@ -69,7 +69,7 @@ void handleUARTData() {
         if (ch == '\r' || ch == '\n') {
             // Kết thúc dòng
             if (uart_rx_buffer.length() > 0) {
-                // Serial.printf("[PIC] Thô: %s\n", uart_rx_buffer.c_str());
+                Serial.printf("[PIC] Thô: %s\n", uart_rx_buffer.c_str());
                 
                 if (uart_rx_buffer.startsWith("Val:")) {
                     value = getValue(uart_rx_buffer);
@@ -169,7 +169,7 @@ int getRawTouch(const String& data) {
     }
     return -1;
 }
-0
+
 int getThreshold(const String& data) {
     if (data.startsWith("Thr:")) {
         int colonPos = data.indexOf(':');
@@ -198,4 +198,17 @@ int getValue() {
 }
 int getThreshold() { 
     return threshold;
+}
+
+void sendUARTCommand(const String& command) {
+    if (!isUARTReady()) {
+        Serial.println("[UART] UART chưa được khởi tạo!");
+        return;
+    }
+    
+    pic_serial->println(command);
+    // pic_serial->println("\r\n");
+    pic_serial->print("\r");
+    Serial.printf("[UART] Gửi lệnh đến PIC: %s\n", command.c_str());
+    
 }
