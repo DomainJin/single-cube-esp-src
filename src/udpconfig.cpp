@@ -1,5 +1,5 @@
 #include "main.h"
-
+#include "IR.h"
 // ===== UDP TOUCH CONFIGURATION =====
 const char* TOUCH_SERVER_IP = "192.168.0.159";
 const int TOUCH_SERVER_PORT = 7043;
@@ -68,6 +68,61 @@ void sendTouchValueInt(int touchValue) {
     
     // Gọi hàm chính
     sendTouchValue(message);
+}
+
+// Hàm gửi giá trị ADC raw qua UDP
+void sendADCValue(uint16_t adcRaw, float adcVoltage) {
+    if (!isUDPTouchReady()) {
+        // Serial.println("[UDP_ADC] Cảnh báo: UDP ADC chưa sẵn sàng!");
+        return;
+    }
+    
+    // Tạo message chứa cả ADC raw và voltage
+    char adcMessage[64];
+    snprintf(adcMessage, sizeof(adcMessage), "ADC_RAW:%d,VOLTAGE:%.3f", adcRaw, adcVoltage);
+    
+    // Gửi UDP packet
+    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
+    touch_udp.write((uint8_t*)adcMessage, strlen(adcMessage));
+    touch_udp.endPacket();
+    
+    // Serial.printf("[UDP_ADC] Gửi: %s -> %s:%d\n", adcMessage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+}
+
+// Hàm gửi chỉ ADC raw (đơn giản hơn)
+void sendADCRaw(uint16_t adcRaw) {
+    if (!isUDPTouchReady()) {
+        return;
+    }
+    
+    // Tạo message đơn giản
+    char adcMessage[32];
+    snprintf(adcMessage, sizeof(adcMessage), "ADC:%d", adcRaw);
+    
+    // Gửi UDP packet
+    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
+    touch_udp.write((uint8_t*)adcMessage, strlen(adcMessage));
+    touch_udp.endPacket();
+    
+    Serial.printf("[UDP_ADC] Gửi ADC raw: %d -> %s:%d\n", adcRaw, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+}
+
+// Hàm gửi chỉ voltage (đơn giản hơn)
+void sendADCVoltage(float voltage) {
+    if (!isUDPTouchReady()) {
+        return;
+    }
+    
+    // Tạo message đơn giản
+    char voltageMessage[32];
+    snprintf(voltageMessage, sizeof(voltageMessage), "VOLTAGE:%.3f", voltage);
+    
+    // Gửi UDP packet
+    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
+    touch_udp.write((uint8_t*)voltageMessage, strlen(voltageMessage));
+    touch_udp.endPacket();
+    
+    // Serial.printf("[UDP_ADC] Gửi voltage: %.3fV -> %s:%d\n", voltage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
 }
 
 // ===== UDP TOUCH UTILITY FUNCTIONS =====
@@ -168,20 +223,43 @@ void handleUDPReceive() {
                 if (xiLanhValue == 1) {
                     digitalWrite(2, HIGH);
                     digitalWrite(15, LOW);
-                    Serial.println("[UDP_XILANH] IO15 -> HIGH (Xi lanh BẬT)");
+                    Serial.println("[UDP_XILANH] IO15 -> HIGH (Xi lanh DOWN)");
                 } else if (xiLanhValue == 2) {
                     digitalWrite(2, LOW);
                     digitalWrite(15, HIGH);
-                    Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh TẮT)");
+                    Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh UP)");
                 } else if (xiLanhValue == 0) {
                     digitalWrite(2, LOW);
                     digitalWrite(15, LOW);
-                    Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh TẮT)");
+                    Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh STOP)");
                 }
                 
                 else {
                     Serial.printf("[UDP_XILANH] Giá trị không hợp lệ: %d (chỉ chấp nhận 0 hoặc 1)\n", xiLanhValue);
                 }
+            }
+
+            else if (data.startsWith("IRtransmitOut:")) {
+                int colonPos = data.indexOf(':');
+                String valueStr = data.substring(colonPos + 1);
+                valueStr.trim();
+                
+                float VoltageValue = valueStr.toFloat();
+                
+                tranLedOut(VoltageValue);
+                Serial.printf("[UDP_IR] Chân TRAN LED xuất voltage: %.2f V\n", VoltageValue);
+                
+            }
+            else if (data.startsWith("IRRecieveOut:")) {
+                int colonPos = data.indexOf(':');
+                String valueStr = data.substring(colonPos + 1);
+                valueStr.trim();
+                
+                float VoltageValue = valueStr.toFloat();
+                
+                revLedOut(VoltageValue);
+                Serial.printf("[UDP_IR] Chân REV LED xuất voltage: %.2f V\n", VoltageValue);
+                
             }
             
             // ✅ Xử lý lệnh RECALIB
@@ -327,4 +405,79 @@ void handleUDPReceive() {
             Serial.println("[DEBUG] Đang chờ UDP packets...");
         }
     }
+}
+
+// ===== IR ADC UDP FUNCTIONS =====
+// Hàm gửi giá trị IR ADC raw qua UDP (chân 35)
+void sendIRADCValue(uint16_t adcRaw, float adcVoltage) {
+    if (!isUDPTouchReady()) {
+        // Serial.println("[UDP_IR_ADC] Cảnh báo: UDP chưa sẵn sàng!");
+        return;
+    }
+    
+    // Tạo message chứa cả IR ADC raw và voltage
+    char irAdcMessage[64];
+    snprintf(irAdcMessage, sizeof(irAdcMessage), "IR_ADC_RAW:%d,IR_VOLTAGE:%.3f", adcRaw, adcVoltage);
+    
+    // Gửi UDP packet
+    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
+    touch_udp.write((uint8_t*)irAdcMessage, strlen(irAdcMessage));
+    touch_udp.endPacket();
+    
+    // Serial.printf("[UDP_IR_ADC] Gửi: %s -> %s:%d\n", irAdcMessage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+}
+
+// Hàm gửi chỉ IR ADC raw (đơn giản hơn)
+void sendIRADCRaw(uint16_t adcRaw) {
+    if (!isUDPTouchReady()) {
+        return;
+    }
+    
+    // Tạo message đơn giản
+    char irAdcMessage[32];
+    snprintf(irAdcMessage, sizeof(irAdcMessage), "IR_ADC:%d", adcRaw);
+    
+    // Gửi UDP packet
+    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
+    touch_udp.write((uint8_t*)irAdcMessage, strlen(irAdcMessage));
+    touch_udp.endPacket();
+    
+    Serial.printf("[UDP_IR_ADC] Gửi IR ADC raw: %d -> %s:%d\n", adcRaw, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+}
+
+// Hàm gửi chỉ IR voltage (đơn giản hơn)
+void sendIRVoltage(float voltage) {
+    if (!isUDPTouchReady()) {
+        return;
+    }
+    
+    // Tạo message đơn giản
+    char irVoltageMessage[32];
+    snprintf(irVoltageMessage, sizeof(irVoltageMessage), "IR_VOLTAGE:%.3f", voltage);
+    
+    // Gửi UDP packet
+    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
+    touch_udp.write((uint8_t*)irVoltageMessage, strlen(irVoltageMessage));
+    touch_udp.endPacket();
+    
+    // Serial.printf("[UDP_IR_ADC] Gửi IR voltage: %.3fV -> %s:%d\n", voltage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+}
+
+// Hàm gửi IR receive data (chân 35 đọc tín hiệu phản hồi)
+void sendIRReceiveData(uint16_t adcRaw, float voltage) {
+    if (!isUDPTouchReady()) {
+        return;
+    }
+    
+    // Format đặc biệt cho IR receive data
+    char irReceiveMessage[64];
+    snprintf(irReceiveMessage, sizeof(irReceiveMessage), "IR_RECEIVE:RAW=%d,VOLT=%.3f", adcRaw, voltage);
+    
+    // Gửi UDP packet
+    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
+    touch_udp.write((uint8_t*)irReceiveMessage, strlen(irReceiveMessage));
+    touch_udp.endPacket();
+    
+    Serial.printf("[UDP_IR_RECEIVE] Gửi IR receive data: %s -> %s:%d\n", 
+                 irReceiveMessage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
 }

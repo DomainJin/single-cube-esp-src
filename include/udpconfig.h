@@ -34,6 +34,33 @@ void sendTouchValue(const char* touchMessage);
 void sendTouchValueInt(int touchValue);
 
 /**
+ * Gửi giá trị IR ADC qua UDP
+ * @param adcRaw Giá trị ADC thô
+ * @param adcVoltage Giá trị điện áp tương ứng
+ */
+void sendIRADCValue(uint16_t adcRaw, float adcVoltage);    // Gửi cả IR ADC raw và voltage
+
+/**
+ * Gửi giá trị ADC qua UDP
+ * @param adcRaw Giá trị ADC thô
+ * @param adcVoltage Giá trị điện áp tương ứng
+ */
+void sendIRADCRaw(uint16_t adcRaw);                        // Gửi chỉ IR ADC raw
+
+/**
+ * Gửi giá trị voltage qua UDP
+ * @param voltage Giá trị điện áp
+ */
+void sendIRVoltage(float voltage);                         // Gửi chỉ IR voltage
+
+/**
+ * Gửi giá trị ADC qua UDP
+ * @param adcRaw Giá trị ADC thô
+ * @param adcVoltage Giá trị điện áp tương ứng
+ */
+void sendIRReceiveData(uint16_t adcRaw, float voltage);    // Gửi IR receive data
+
+/**
  * Kiểm tra trạng thái kết nối UDP Touch
  * @return true nếu UDP Touch sẵn sàng, false nếu chưa kết nối
  */

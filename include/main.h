@@ -10,24 +10,14 @@
 #include "osc.h"
 #include "uart.h"
 #include "udpconfig.h"
+#include "IR.h"
+#include "ipconfig.h"
 
 // ===== CONFIGURATION =====
 
 // WiFi Configuration
 extern const char* ssid;
 extern const char* password;
-
-// OSC Configuration  
-extern const char* resolume_ip;
-extern const int resolume_port;
-
-// ===== GLOBAL OBJECTS =====
-
-extern WiFiUDP udp;
-extern IPAddress resolume_address;
-
-// ===== FUNCTION DECLARATIONS =====
-
 
 
 /**
@@ -81,6 +71,15 @@ inline IPAddress getLocalIP() {
 inline int getWiFiRSSI() {
     return WiFi.RSSI();
 }
+
+// IP Config functions
+bool initIPConfig();
+void sendHeartbeat();
+void handleHeartbeat();
+bool isIPConfigReady();
+String getESPIdentifier();
+void sendCustomHeartbeat(const String& customMessage);
+void sendESPStatus(const String& status);
 
 // ===== CONSTANTS =====
 

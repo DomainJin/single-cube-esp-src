@@ -1,17 +1,10 @@
 #include <Arduino.h>
 #include "main.h"
 
+
 // Cấu hình WiFi
 const char* ssid = "Cube Touch";
 const char* password = "admin123";
-
-// Cấu hình OSC
-const char* resolume_ip = "192.168.0.241";
-const int resolume_port = 7000;
-
-// Cấu hình OSC
-const char* server_ip = "192.168.0.202";
-const int server_port = 7000;
 
 WiFiUDP udp;
 IPAddress resolume_address;
@@ -38,18 +31,6 @@ void setup() {
     
     Serial.println("[SETUP] WS2812 hoàn thành!");
     
-    // ❌ XÓA PHẦN TEST NÀY - NÓ LÀM LED SÁNG XANH VÚ VÚ
-    // Serial.println("[SETUP] Test tất cả WS2812 màu đỏ...");
-    // setAllLEDs(255, 0, 0);
-    // delay(1000);
-    // 
-    // Serial.println("[SETUP] Test tất cả WS2812 màu xanh...");
-    // setAllLEDs(0, 255, 0);  // ← ĐÂY LÀ LÝ DO LED SÁNG XANH!
-    // delay(1000);
-    // 
-    // Serial.println("[SETUP] Tắt tất cả WS2812...");
-    // clearAllLEDs();
-    
     // Cấu hình pin IO15 cho xi lanh
     pinMode(2, OUTPUT);
     pinMode(15, OUTPUT);
@@ -72,12 +53,22 @@ void setup() {
     initOSC();
     initUART();
     initUDPTouch();
+    initIR();
+    initIPConfig();  // Thêm dòng này
     
     Serial.println("Tất cả modules đã sẵn sàng!");
+    
+    // Gửi heartbeat đầu tiên
+    sendESPStatus("READY");
 }
 
 void loop() {
     handleUARTData();
     handleUDPReceive();
-
+    handleHeartbeat();  // Thêm dòng này
+    
+    float inputVoltage = analogReadVoltage();
+    uint16_t rawValue = analogReadRaw();
+    sendIRADCRaw(rawValue);
+    delay(100);
 }
