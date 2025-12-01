@@ -1,7 +1,7 @@
 #include "main.h"
 
 // ===== LED STRIP OBJECT =====
-Adafruit_NeoPixel strip(150, 5, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // ===== LED CONTROL VARIABLES =====
 bool effectEnable = true;

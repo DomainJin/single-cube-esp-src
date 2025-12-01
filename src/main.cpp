@@ -1,13 +1,19 @@
 #include <Arduino.h>
 #include "main.h"
+#include "mpu6050.h"
 
 
 // Cấu hình WiFi
 const char* ssid = "Cube Touch";
 const char* password = "admin123";
+// const char* ssid = "SGM";
+// const char* password = "19121996";
 
 WiFiUDP udp;
 IPAddress resolume_address;
+
+// Khởi tạo MPU6050
+MPU6050 mpu;
 
 
 bool sendEnableOnce = false;
@@ -58,6 +64,13 @@ void setup() {
     digitalWrite(18, LOW);
     initIPConfig();  // Thêm dòng này
     
+    // Khởi tạo MPU6050
+    if (mpu.begin()) {
+        Serial.println("MPU6050 đã khởi tạo thành công!");
+    } else {
+        Serial.println("Lỗi: Không thể khởi tạo MPU6050!");
+    }
+    
     Serial.println("Tất cả modules đã sẵn sàng!");
     
     // Gửi heartbeat đầu tiên
@@ -72,5 +85,28 @@ void loop() {
     float inputVoltage = analogReadVoltage();
     uint16_t rawValue = analogReadRaw();
     sendIRADCRaw(rawValue);
+    
+    // Đọc và in giá trị MPU6050
+    // int16_t x, y, z;
+    // mpu.readAccel(&x, &y, &z);
+    
+    // Serial.print("MPU6050 - X: ");
+    // Serial.print(x);
+    // Serial.print(" | Y: ");
+    // Serial.print(y);
+    // Serial.print(" | Z: ");
+    // Serial.println(z);
+    
+    // Hoặc in theo đơn vị g
+    float gx, gy, gz;
+    mpu.readAccelG(&gx, &gy, &gz);
+    Serial.print("MPU6050 (g) - X: ");
+    Serial.print(gx);
+    Serial.print("g | Y: ");
+    Serial.print(gy);
+    Serial.print("g | Z: ");
+    Serial.print(gz);
+    Serial.println("g");
+    
     delay(100);
 }

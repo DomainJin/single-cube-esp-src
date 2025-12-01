@@ -6,7 +6,7 @@
 // Định nghĩa chân
 #define REV_LED_PIN 25      // Chân DAC1 (GPIO25) - revLedOut
 #define TRAN_LED_PIN 26     // Chân DAC2 (GPIO26) - tranLedOut
-#define ANALOG_READ_PIN 33  // Chân ADC (GPIO34) - analogRead
+#define ANALOG_READ_PIN 34  // Chân ADC (GPIO34) - analogRead
 
 // Định nghĩa điện áp tối đa
 #define MAX_VOLTAGE 3.3

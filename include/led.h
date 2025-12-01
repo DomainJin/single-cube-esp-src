@@ -5,7 +5,7 @@
 #include <Adafruit_NeoPixel.h>
 
 // ===== LED CONFIGURATION =====
-#define LED_PIN 22
+#define LED_PIN 5
 #define NUM_LEDS 150
 #define UPDATE_INTERVAL 100  // ms
 
