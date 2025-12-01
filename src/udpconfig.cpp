@@ -1,9 +1,11 @@
 #include "main.h"
 #include "IR.h"
+
 // ===== UDP TOUCH CONFIGURATION =====
 const char* TOUCH_SERVER_IP = "192.168.0.159";
-const int TOUCH_SERVER_PORT = 7043;
-const int LOCAL_TOUCH_PORT = 8001;
+// Port sẽ được tính tự động từ local IP
+int TOUCH_SERVER_PORT = 7043;  // Giá trị mặc định, sẽ được cập nhật
+int LOCAL_TOUCH_PORT = 8001;   // Giá trị mặc định, sẽ được cập nhật
 
 // ===== GLOBAL UDP TOUCH OBJECTS =====
 WiFiUDP touch_udp;
@@ -13,6 +15,25 @@ IPAddress touch_server_address;
 bool touchActive = false;
 unsigned long touchDuration = 0;
 int r,g,b;
+
+// ===== DYNAMIC PORT CALCULATION =====
+void calculatePortsFromLocalIP() {
+    // Lấy local IP address
+    IPAddress localIP = WiFi.localIP();
+    
+    // Lấy 8 bit cuối (octet thứ 4) của IP
+    uint8_t lastOctet = localIP[3];
+    
+    // Tính port = lastOctet * 100
+    // Ví dụ: IP 192.168.0.43 → lastOctet = 43 → port = 4300
+    TOUCH_SERVER_PORT = lastOctet * 100;
+    LOCAL_TOUCH_PORT = lastOctet * 100;
+    
+    Serial.printf("[UDP_PORT_CALC] Local IP: %s\n", localIP.toString().c_str());
+    Serial.printf("[UDP_PORT_CALC] Last octet: %d\n", lastOctet);
+    Serial.printf("[UDP_PORT_CALC] Calculated TOUCH_SERVER_PORT: %d\n", TOUCH_SERVER_PORT);
+    Serial.printf("[UDP_PORT_CALC] Calculated LOCAL_TOUCH_PORT: %d\n", LOCAL_TOUCH_PORT);
+}
 
 // ===== UDP TOUCH INITIALIZATION =====
 bool initUDPTouch() {
@@ -24,9 +45,12 @@ bool initUDPTouch() {
         return false;
     }
     
-    // Khởi tạo UDP
+    // Tính toán port dựa trên local IP
+    calculatePortsFromLocalIP();
+    
+    // Khởi tạo UDP với port được tính toán
     if (!touch_udp.begin(LOCAL_TOUCH_PORT)) {
-        Serial.println("[UDP_TOUCH] Lỗi: Không thể khởi tạo UDP!");
+        Serial.printf("[UDP_TOUCH] Lỗi: Không thể khởi tạo UDP trên port %d!\n", LOCAL_TOUCH_PORT);
         return false;
     }
     
@@ -53,7 +77,7 @@ void sendTouchValue(const char* touchMessage) {
         return;
     }
     
-    // Gửi UDP packet
+    // Gửi UDP packet với port được tính toán
     touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
     touch_udp.write((uint8_t*)touchMessage, strlen(touchMessage));
     touch_udp.endPacket();
@@ -221,16 +245,16 @@ void handleUDPReceive() {
                 int xiLanhValue = valueStr.toInt();
                 
                 if (xiLanhValue == 1) {
-                    digitalWrite(2, HIGH);
-                    digitalWrite(15, LOW);
+                    digitalWrite(17, HIGH);
+                    digitalWrite(18, LOW);
                     Serial.println("[UDP_XILANH] IO15 -> HIGH (Xi lanh DOWN)");
                 } else if (xiLanhValue == 2) {
-                    digitalWrite(2, LOW);
-                    digitalWrite(15, HIGH);
+                    digitalWrite(17, LOW);
+                    digitalWrite(18, HIGH);
                     Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh UP)");
                 } else if (xiLanhValue == 0) {
-                    digitalWrite(2, LOW);
-                    digitalWrite(15, LOW);
+                    digitalWrite(17, LOW);
+                    digitalWrite(18, LOW);
                     Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh STOP)");
                 }
                 

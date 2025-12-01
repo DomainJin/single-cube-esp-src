@@ -31,9 +31,7 @@ void setup() {
     
     Serial.println("[SETUP] WS2812 hoàn thành!");
     
-    // Cấu hình pin IO15 cho xi lanh
-    pinMode(2, OUTPUT);
-    pinMode(15, OUTPUT);
+    
     
     // Kết nối WiFi
     WiFi.begin(ssid, password);
@@ -53,7 +51,11 @@ void setup() {
     initOSC();
     initUART();
     initUDPTouch();
-    initIR();
+    initIR();// Cấu hình pin IO15 cho xi lanh
+    pinMode(17, OUTPUT);
+    digitalWrite(17, LOW);
+    pinMode(18, OUTPUT);
+    digitalWrite(18, LOW);
     initIPConfig();  // Thêm dòng này
     
     Serial.println("Tất cả modules đã sẵn sàng!");
@@ -65,7 +67,7 @@ void setup() {
 void loop() {
     handleUARTData();
     handleUDPReceive();
-    handleHeartbeat();  // Thêm dòng này
+    handleHeartbeat();
     
     float inputVoltage = analogReadVoltage();
     uint16_t rawValue = analogReadRaw();

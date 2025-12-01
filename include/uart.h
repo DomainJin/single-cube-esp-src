@@ -7,8 +7,8 @@
 // ===== UART CONFIGURATION =====
 
 // UART pins
-#define UART_RX_PIN 33  // RX pin (nhận dữ liệu từ PIC)
-#define UART_TX_PIN 14  // TX pin (gửi dữ liệu đến PIC)
+#define UART_RX_PIN 4  // RX pin (nhận dữ liệu từ PIC)
+#define UART_TX_PIN 5  // TX pin (gửi dữ liệu đến PIC)
 #define UART_BAUD 115200  // Baud rate
 #define UART_PORT 2     // UART2 (ESP32 có 3 UART: 0, 1, 2)
 

@@ -6,8 +6,8 @@
 
 // ===== UDP TOUCH CONFIGURATION =====
 extern const char* TOUCH_SERVER_IP;
-extern const int TOUCH_SERVER_PORT;
-extern const int LOCAL_TOUCH_PORT;
+extern int TOUCH_SERVER_PORT;
+extern int LOCAL_TOUCH_PORT;
 
 // ===== GLOBAL UDP TOUCH OBJECTS =====
 extern WiFiUDP touch_udp;
