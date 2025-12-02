@@ -4,10 +4,10 @@
 
 
 // Cấu hình WiFi
-const char* ssid = "Cube Touch";
-const char* password = "admin123";
-// const char* ssid = "SGM";
-// const char* password = "19121996";
+// const char* ssid = "Cube Touch";
+// const char* password = "admin123";
+const char* ssid = "SGM";
+const char* password = "19121996";
 
 WiFiUDP udp;
 IPAddress resolume_address;

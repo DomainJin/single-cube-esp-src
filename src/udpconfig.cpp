@@ -2,8 +2,8 @@
 #include "IR.h"
 
 // ===== UDP TOUCH CONFIGURATION =====
-const char* TOUCH_SERVER_IP = "192.168.0.159";
-// const char* TOUCH_SERVER_IP = "192.168.1.22";
+// const char* TOUCH_SERVER_IP = "192.168.0.159";
+const char* TOUCH_SERVER_IP = "192.168.1.22";
 // Port sẽ được tính tự động từ local IP
 int TOUCH_SERVER_PORT = 7043;  // Giá trị mặc định, sẽ được cập nhật
 int LOCAL_TOUCH_PORT = 8001;   // Giá trị mặc định, sẽ được cập nhật
