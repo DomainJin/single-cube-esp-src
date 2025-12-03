@@ -7,7 +7,7 @@ MPU6050::MPU6050() {
 
 bool MPU6050::begin() {
     // Initialize I2C (SDA=GPIO27, SCL=GPIO12 - mặc định cho ESP32)
-    Wire.begin(27, 25);
+    Wire.begin(12, 14);
     
     // Wake up MPU6050 (it starts in sleep mode)
     Wire.beginTransmission(MPU6050_ADDR);

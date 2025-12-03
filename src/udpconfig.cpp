@@ -1,5 +1,6 @@
 #include "main.h"
 #include "IR.h"
+#include "a4l.h"
 
 // ===== UDP TOUCH CONFIGURATION =====
 // const char* TOUCH_SERVER_IP = "192.168.0.159";
@@ -271,7 +272,7 @@ void handleUDPReceive() {
                 
                 float VoltageValue = valueStr.toFloat();
                 
-                tranLedOut(VoltageValue);
+                // tranLedOut(VoltageValue);
                 Serial.printf("[UDP_IR] Chân TRAN LED xuất voltage: %.2f V\n", VoltageValue);
                 
             }
@@ -282,7 +283,7 @@ void handleUDPReceive() {
                 
                 float VoltageValue = valueStr.toFloat();
                 
-                revLedOut(VoltageValue);
+                // revLedOut(VoltageValue);
                 Serial.printf("[UDP_IR] Chân REV LED xuất voltage: %.2f V\n", VoltageValue);
                 
             }
@@ -421,6 +422,24 @@ void handleUDPReceive() {
                     Serial.printf("[UDP_LED] Áp dụng màu RGB: (%d,%d,%d)\n", r, g, b);
                 }
             }
+            else if (data.startsWith("A4L:")) {
+                int colonPos = data.indexOf(':');
+                String valueStr = data.substring(colonPos + 1);
+                valueStr.trim();
+                
+                int a4l = valueStr.toInt();
+                if (a4l == 0) {
+                    a4lHDMIModeEnable();
+                } else if (a4l == 1) {
+                    a4lSyncModeEnable();
+                } else if (a4l == 2) {
+                    a4lNext();
+                }
+                
+                else {
+                    Serial.printf("[UDP_A4L] Giá trị không hợp lệ: %d (chỉ chấp nhận 0 hoặc 1)\n", a4l);
+                }
+            }
         }
     } else {
         // Debug message mỗi 30 giây để giảm spam
@@ -453,21 +472,21 @@ void sendIRADCValue(uint16_t adcRaw, float adcVoltage) {
 }
 
 // Hàm gửi chỉ IR ADC raw (đơn giản hơn)
-void sendIRADCRaw(uint16_t adcRaw) {
+void sendIRADCRaw(int index, uint16_t adcRaw) {
     if (!isUDPTouchReady()) {
         return;
     }
     
     // Tạo message đơn giản
     char irAdcMessage[32];
-    snprintf(irAdcMessage, sizeof(irAdcMessage), "IR_ADC:%d", adcRaw);
+    snprintf(irAdcMessage, sizeof(irAdcMessage), "IR_ADC_%d:,%d", index, adcRaw);
     
     // Gửi UDP packet
     touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
     touch_udp.write((uint8_t*)irAdcMessage, strlen(irAdcMessage));
     touch_udp.endPacket();
     
-    Serial.printf("[UDP_IR_ADC] Gửi IR ADC raw: %d -> %s:%d\n", adcRaw, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    Serial.printf("[UDP_IR_ADC] Gửi IR ADC_%d raw: %d -> %s:%d\n", index, adcRaw, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
 }
 
 // Hàm gửi chỉ IR voltage (đơn giản hơn)
@@ -505,4 +524,53 @@ void sendIRReceiveData(uint16_t adcRaw, float voltage) {
     
     Serial.printf("[UDP_IR_RECEIVE] Gửi IR receive data: %s -> %s:%d\n", 
                  irReceiveMessage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+}
+
+// Hàm gửi chỉ IR ADC raw (đơn giản hơn)
+void sendIRThreshold(int index, uint16_t threshold) {
+    if (!isUDPTouchReady()) {
+        return;
+    }
+    
+    // Tạo message đơn giản
+    char irAdcMessage[32];
+    snprintf(irAdcMessage, sizeof(irAdcMessage), "IR_THR_%d:,%d", index, threshold);
+    
+    // Gửi UDP packet
+    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
+    touch_udp.write((uint8_t*)irAdcMessage, strlen(irAdcMessage));
+    touch_udp.endPacket();
+    
+    Serial.printf("[UDP_IR_ADC] Gửi IR ADC_%d threshold: %d -> %s:%d\n", index, threshold, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+}
+
+// Hàm gửi trạng thái mặt qua UDP
+void sendStatusFace(int faceNumber, const char* status) {
+    if (!isUDPTouchReady()) {
+        return;
+    }
+    
+    // Kiểm tra faceNumber hợp lệ (1-6)
+    if (faceNumber < 1 || faceNumber > 6) {
+        Serial.printf("[UDP_FACE] Lỗi: Số mặt không hợp lệ: %d (phải từ 1-6)\n", faceNumber);
+        return;
+    }
+    
+    // Kiểm tra status không null
+    if (status == nullptr) {
+        Serial.println("[UDP_FACE] Lỗi: Status là null!");
+        return;
+    }
+    
+    // Tạo message với format: FACE_<số>:<status>
+    char faceMessage[32];
+    snprintf(faceMessage, sizeof(faceMessage), "FACE_%d:%s", faceNumber, status);
+    
+    // Gửi UDP packet
+    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
+    touch_udp.write((uint8_t*)faceMessage, strlen(faceMessage));
+    touch_udp.endPacket();
+    
+    Serial.printf("[UDP_FACE] Gửi trạng thái Mặt %d: %s -> %s:%d\n", 
+                 faceNumber, status, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
 }

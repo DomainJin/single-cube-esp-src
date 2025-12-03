@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "main.h"
 #include "mpu6050.h"
+#include "a4l.h"
 
 
 // Cấu hình WiFi
@@ -55,13 +56,16 @@ void setup() {
     
     // Khởi tạo các modules
     initOSC();
-    initUART();
+    // initUART();
     initUDPTouch();
     initIR();// Cấu hình pin IO15 cho xi lanh
     pinMode(17, OUTPUT);
     digitalWrite(17, LOW);
     pinMode(18, OUTPUT);
     digitalWrite(18, LOW);
+
+    a4lInit();
+
     initIPConfig();  // Thêm dòng này
     
     // Khởi tạo MPU6050
@@ -78,14 +82,13 @@ void setup() {
 }
 
 void loop() {
-    handleUARTData();
+    // handleUARTData();
     handleUDPReceive();
     handleHeartbeat();
+    handleIRModule();
     
-    float inputVoltage = analogReadVoltage();
-    uint16_t rawValue = analogReadRaw();
-    sendIRADCRaw(rawValue);
     
+
     // Đọc và in giá trị MPU6050
     // int16_t x, y, z;
     // mpu.readAccel(&x, &y, &z);
@@ -107,6 +110,6 @@ void loop() {
     Serial.print("g | Z: ");
     Serial.print(gz);
     Serial.println("g");
+    // delay(100);
     
-    delay(100);
 }

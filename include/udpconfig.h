@@ -45,7 +45,7 @@ void sendIRADCValue(uint16_t adcRaw, float adcVoltage);    // Gửi cả IR ADC 
  * @param adcRaw Giá trị ADC thô
  * @param adcVoltage Giá trị điện áp tương ứng
  */
-void sendIRADCRaw(uint16_t adcRaw);                        // Gửi chỉ IR ADC raw
+void sendIRADCRaw(int index, uint16_t adcRaw);                        // Gửi chỉ IR ADC raw
 
 /**
  * Gửi giá trị voltage qua UDP
@@ -59,6 +59,20 @@ void sendIRVoltage(float voltage);                         // Gửi chỉ IR vol
  * @param adcVoltage Giá trị điện áp tương ứng
  */
 void sendIRReceiveData(uint16_t adcRaw, float voltage);    // Gửi IR receive data
+
+/**
+ * Gửi giá trị threshold qua UDP
+ * @param index Chân mấy
+ * @param threshold Giá trị threshold
+ */
+void sendIRThreshold(int index, uint16_t threshold);       // Gửi IR threshold
+
+/**
+ * Gửi trạng thái mặt qua UDP
+ * @param faceNumber Số mặt (1-6)
+ * @param status Trạng thái mặt ("UP", "DOWN", "TOUCH", "None")
+ */
+void sendStatusFace(int faceNumber, const char* status);   // Gửi trạng thái mặt
 
 /**
  * Kiểm tra trạng thái kết nối UDP Touch

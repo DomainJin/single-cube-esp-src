@@ -37,7 +37,7 @@ bool initUART() {
     pic_serial = new HardwareSerial(UART_PORT);
     
     // Khởi tạo UART với các tham số
-    pic_serial->begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+    // pic_serial->begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
     
     // Đặt rx buffer size
     pic_serial->setRxBufferSize(UART_RX_BUFFER_SIZE);
@@ -45,7 +45,7 @@ bool initUART() {
     uart_initialized = true;
     
     Serial.printf("[UART] UART%d khởi tạo thành công\n", UART_PORT);
-    Serial.printf("[UART] RX=%d, TX=%d, Baud=%d\n", UART_RX_PIN, UART_TX_PIN, UART_BAUD);
+    // Serial.printf("[UART] RX=%d, TX=%d, Baud=%d\n", UART_RX_PIN, UART_TX_PIN, UART_BAUD);
     Serial.println("[UART] Sẵn sàng nhận dữ liệu từ PIC...");
     
     return true;
