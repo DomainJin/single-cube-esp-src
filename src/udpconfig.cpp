@@ -614,8 +614,11 @@ void sendCompassHeading(float heading, const char* direction) {
         return;
     }
     
+    // Offset = declination angle (góc lệch từ)
+    float offset = 0.5;  // Vietnam ~0.5°
+    
     char compassMessage[64];
-    snprintf(compassMessage, sizeof(compassMessage), "COMPASS:%.1f,%s", heading, direction);
+    snprintf(compassMessage, sizeof(compassMessage), "COMPASS:%.1f,%.1f,%s", heading, offset, direction);
     sendUDPPacket(compassMessage, UDP_PRIORITY_NORMAL);  // Ưu tiên bình thường
 }
 

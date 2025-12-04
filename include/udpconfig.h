@@ -83,17 +83,21 @@ void sendIRThreshold(int index, uint16_t threshold);       // Gửi IR threshold
 void sendStatusFace(int faceNumber, const char* status);   // Gửi trạng thái mặt
 
 /**
- * Gửi hướng từ compass qua UDP
+ * Gửi hướng từ compass qua UDP (processed data)
  * @param heading Góc hướng (0-360 độ)
  * @param direction Hướng cardinal (N, NE, E, SE, S, SW, W, NW)
+ * Format: "COMPASS:heading,offset,direction"
+ * Ví dụ: "COMPASS:45.5,0.5,NE"
  */
 void sendCompassHeading(float heading, const char* direction);
 
 /**
- * Gửi dữ liệu thô từ magnetometer qua UDP
+ * Gửi dữ liệu thô từ magnetometer qua UDP (raw data)
  * @param mx Từ trường trục X
  * @param my Từ trường trục Y
  * @param mz Từ trường trục Z
+ * Format: "MAG:mx,my,mz"
+ * Ví dụ: "MAG:-147,-1430,110"
  */
 void sendCompassRaw(int16_t mx, int16_t my, int16_t mz);
 
