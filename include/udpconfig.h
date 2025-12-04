@@ -4,6 +4,14 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
+// ===== UDP PRIORITY LEVELS =====
+enum UDPPriority {
+    UDP_PRIORITY_LOW = 0,      // IR ADC, Threshold (có thể bỏ qua)
+    UDP_PRIORITY_NORMAL = 1,   // Touch value, general messages
+    UDP_PRIORITY_HIGH = 2,     // Face status (quan trọng)
+    UDP_PRIORITY_CRITICAL = 3  // System status, errors
+};
+
 // ===== UDP TOUCH CONFIGURATION =====
 extern const char* TOUCH_SERVER_IP;
 extern int TOUCH_SERVER_PORT;
@@ -75,6 +83,21 @@ void sendIRThreshold(int index, uint16_t threshold);       // Gửi IR threshold
 void sendStatusFace(int faceNumber, const char* status);   // Gửi trạng thái mặt
 
 /**
+ * Gửi hướng từ compass qua UDP
+ * @param heading Góc hướng (0-360 độ)
+ * @param direction Hướng cardinal (N, NE, E, SE, S, SW, W, NW)
+ */
+void sendCompassHeading(float heading, const char* direction);
+
+/**
+ * Gửi dữ liệu thô từ magnetometer qua UDP
+ * @param mx Từ trường trục X
+ * @param my Từ trường trục Y
+ * @param mz Từ trường trục Z
+ */
+void sendCompassRaw(int16_t mx, int16_t my, int16_t mz);
+
+/**
  * Kiểm tra trạng thái kết nối UDP Touch
  * @return true nếu UDP Touch sẵn sàng, false nếu chưa kết nối
  */
@@ -99,5 +122,17 @@ int availableUDPData();
  * Function này sẽ tự động parse và in ra Serial
  */
 void handleUDPReceive();
+
+/**
+ * Xử lý hàng đợi UDP - gửi các message đang chờ
+ * Gọi function này trong loop() để xử lý queue
+ */
+void processUDPQueue();
+
+/**
+ * Xử lý quá trình RECALIB không blocking
+ * Gọi function này trong loop() để xử lý recalibration
+ */
+void processRecalibration();
 
 #endif // UDP_CONFIG_H

@@ -2,9 +2,31 @@
 #include "IR.h"
 #include "a4l.h"
 
+// ===== UDP SEND CONTROL =====
+SemaphoreHandle_t udpMutex = NULL;  // Mutex để đồng bộ gửi UDP
+unsigned long lastUDPSendTime = 0;   // Thời gian gửi UDP lần cuối
+const unsigned long UDP_THROTTLE_MS = 2;  // Khoảng cách tối thiểu giữa 2 lần gửi (2ms - giảm latency)
+
+// ===== RECALIBRATION STATE =====
+static unsigned long recalibStartTime = 0;
+static int recalibStep = 0;  // 0: idle, 1: sent D, 2: sent A, 3: waiting 10s, 4: done
+
+// Hàng đợi ưu tiên cho các message
+struct UDPMessage {
+    char message[128];
+    UDPPriority priority;
+    unsigned long timestamp;
+};
+
+#define UDP_QUEUE_SIZE 50  // ✅ Tăng từ 20 lên 50 để tránh mất heartbeat
+UDPMessage udpQueue[UDP_QUEUE_SIZE];
+int queueHead = 0;
+int queueTail = 0;
+int queueCount = 0;
+
 // ===== UDP TOUCH CONFIGURATION =====
 // const char* TOUCH_SERVER_IP = "192.168.0.159";
-const char* TOUCH_SERVER_IP = "192.168.1.22";
+const char* TOUCH_SERVER_IP = "192.168.1.150";
 // Port sẽ được tính tự động từ local IP
 int TOUCH_SERVER_PORT = 7043;  // Giá trị mặc định, sẽ được cập nhật
 int LOCAL_TOUCH_PORT = 8001;   // Giá trị mặc định, sẽ được cập nhật
@@ -41,6 +63,15 @@ void calculatePortsFromLocalIP() {
 bool initUDPTouch() {
     Serial.println("[UDP_TOUCH] Khởi tạo UDP Touch module...");
     
+    // Tạo mutex cho UDP
+    if (udpMutex == NULL) {
+        udpMutex = xSemaphoreCreateMutex();
+        if (udpMutex == NULL) {
+            Serial.println("[UDP_TOUCH] Lỗi: Không thể tạo mutex!");
+            return false;
+        }
+    }
+    
     // Kiểm tra WiFi trước khi khởi tạo UDP
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[UDP_TOUCH] Lỗi: WiFi chưa kết nối!");
@@ -66,25 +97,137 @@ bool initUDPTouch() {
     return true;
 }
 
+// ===== UDP QUEUE MANAGEMENT =====
+bool enqueueUDPMessage(const char* message, UDPPriority priority) {
+    if (queueCount >= UDP_QUEUE_SIZE) {
+        // Hàng đợi đầy, kiểm tra có thể thay thế message ưu tiên thấp hơn không
+        for (int i = 0; i < UDP_QUEUE_SIZE; i++) {
+            int idx = (queueHead + i) % UDP_QUEUE_SIZE;
+            if (udpQueue[idx].priority < priority) {
+                // Thay thế message có ưu tiên thấp hơn
+                strncpy(udpQueue[idx].message, message, sizeof(udpQueue[idx].message) - 1);
+                udpQueue[idx].message[sizeof(udpQueue[idx].message) - 1] = '\0';
+                udpQueue[idx].priority = priority;
+                udpQueue[idx].timestamp = millis();
+                return true;
+            }
+        }
+        // Serial.println("[UDP_QUEUE] Hàng đợi đầy, bỏ qua message!");
+        return false;
+    }
+    
+    // Thêm vào hàng đợi
+    strncpy(udpQueue[queueTail].message, message, sizeof(udpQueue[queueTail].message) - 1);
+    udpQueue[queueTail].message[sizeof(udpQueue[queueTail].message) - 1] = '\0';
+    udpQueue[queueTail].priority = priority;
+    udpQueue[queueTail].timestamp = millis();
+    
+    queueTail = (queueTail + 1) % UDP_QUEUE_SIZE;
+    queueCount++;
+    return true;
+}
+
+int findHighestPriorityMessage() {
+    if (queueCount == 0) return -1;
+    
+    int highestIdx = queueHead;
+    UDPPriority highestPriority = udpQueue[queueHead].priority;
+    
+    for (int i = 1; i < queueCount; i++) {
+        int idx = (queueHead + i) % UDP_QUEUE_SIZE;
+        if (udpQueue[idx].priority > highestPriority) {
+            highestPriority = udpQueue[idx].priority;
+            highestIdx = idx;
+        }
+    }
+    
+    return highestIdx;
+}
+
+bool dequeueUDPMessage(char* message, size_t maxLen) {
+    if (queueCount == 0) return false;
+    
+    // Tìm message có ưu tiên cao nhất
+    int idx = findHighestPriorityMessage();
+    if (idx == -1) return false;
+    
+    // Copy message
+    strncpy(message, udpQueue[idx].message, maxLen - 1);
+    message[maxLen - 1] = '\0';
+    
+    // Xóa message khỏi queue bằng cách di chuyển các phần tử
+    if (idx == queueHead) {
+        queueHead = (queueHead + 1) % UDP_QUEUE_SIZE;
+    } else {
+        // Di chuyển các phần tử để lấp chỗ trống
+        int current = idx;
+        while (current != queueTail) {
+            int next = (current + 1) % UDP_QUEUE_SIZE;
+            if (next == queueTail) break;
+            udpQueue[current] = udpQueue[next];
+            current = next;
+        }
+        if (queueTail > 0) {
+            queueTail--;
+        } else {
+            queueTail = UDP_QUEUE_SIZE - 1;
+        }
+    }
+    
+    queueCount--;
+    return true;
+}
+
+// ===== CORE UDP SEND FUNCTION =====
+bool sendUDPPacket(const char* message, UDPPriority priority, bool immediate = false) {
+    if (!isUDPTouchReady()) {
+        return false;
+    }
+    
+    if (message == nullptr || strlen(message) == 0) {
+        return false;
+    }
+    
+    // Nếu không immediate, thêm vào queue
+    if (!immediate) {
+        return enqueueUDPMessage(message, priority);
+    }
+    
+    // Gửi ngay lập tức với mutex (timeout ngắn để tránh block)
+    if (xSemaphoreTake(udpMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        // Throttling - bỏ qua nếu gửi quá nhanh (không dùng delay blocking)
+        unsigned long now = millis();
+        if (now - lastUDPSendTime < UDP_THROTTLE_MS) {
+            xSemaphoreGive(udpMutex);
+            return false;  // Bỏ qua message này
+        }
+        
+        // Gửi packet
+        touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
+        touch_udp.write((uint8_t*)message, strlen(message));
+        touch_udp.endPacket();
+        
+        lastUDPSendTime = millis();
+        xSemaphoreGive(udpMutex);
+        return true;
+    }
+    
+    return false;
+}
+
+// Process queued messages (gọi trong loop)
+void processUDPQueue() {
+    if (queueCount == 0) return;
+    
+    char message[128];
+    if (dequeueUDPMessage(message, sizeof(message))) {
+        sendUDPPacket(message, UDP_PRIORITY_NORMAL, true);
+    }
+}
+
 // ===== UDP TOUCH FUNCTIONS =====
 void sendTouchValue(const char* touchMessage) {
-    if (!isUDPTouchReady()) {
-        // Serial.println("[UDP_TOUCH] Cảnh báo: UDP Touch chưa sẵn sàng!");
-        return;
-    }
-    
-    // Kiểm tra message không null và không rỗng
-    if (touchMessage == nullptr || strlen(touchMessage) == 0) {
-        // Serial.println("[UDP_TOUCH] Cảnh báo: Message rỗng!");
-        return;
-    }
-    
-    // Gửi UDP packet với port được tính toán
-    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
-    touch_udp.write((uint8_t*)touchMessage, strlen(touchMessage));
-    touch_udp.endPacket();
-    
-    // Serial.printf("[UDP_TOUCH] Gửi: %s -> %s:%d\n", touchMessage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    sendUDPPacket(touchMessage, UDP_PRIORITY_NORMAL);
 }
 
 void sendTouchValueInt(int touchValue) {
@@ -98,57 +241,23 @@ void sendTouchValueInt(int touchValue) {
 
 // Hàm gửi giá trị ADC raw qua UDP
 void sendADCValue(uint16_t adcRaw, float adcVoltage) {
-    if (!isUDPTouchReady()) {
-        // Serial.println("[UDP_ADC] Cảnh báo: UDP ADC chưa sẵn sàng!");
-        return;
-    }
-    
-    // Tạo message chứa cả ADC raw và voltage
     char adcMessage[64];
     snprintf(adcMessage, sizeof(adcMessage), "ADC_RAW:%d,VOLTAGE:%.3f", adcRaw, adcVoltage);
-    
-    // Gửi UDP packet
-    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
-    touch_udp.write((uint8_t*)adcMessage, strlen(adcMessage));
-    touch_udp.endPacket();
-    
-    // Serial.printf("[UDP_ADC] Gửi: %s -> %s:%d\n", adcMessage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    sendUDPPacket(adcMessage, UDP_PRIORITY_LOW);
 }
 
 // Hàm gửi chỉ ADC raw (đơn giản hơn)
 void sendADCRaw(uint16_t adcRaw) {
-    if (!isUDPTouchReady()) {
-        return;
-    }
-    
-    // Tạo message đơn giản
     char adcMessage[32];
     snprintf(adcMessage, sizeof(adcMessage), "ADC:%d", adcRaw);
-    
-    // Gửi UDP packet
-    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
-    touch_udp.write((uint8_t*)adcMessage, strlen(adcMessage));
-    touch_udp.endPacket();
-    
-    Serial.printf("[UDP_ADC] Gửi ADC raw: %d -> %s:%d\n", adcRaw, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    sendUDPPacket(adcMessage, UDP_PRIORITY_LOW);
 }
 
 // Hàm gửi chỉ voltage (đơn giản hơn)
 void sendADCVoltage(float voltage) {
-    if (!isUDPTouchReady()) {
-        return;
-    }
-    
-    // Tạo message đơn giản
     char voltageMessage[32];
     snprintf(voltageMessage, sizeof(voltageMessage), "VOLTAGE:%.3f", voltage);
-    
-    // Gửi UDP packet
-    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
-    touch_udp.write((uint8_t*)voltageMessage, strlen(voltageMessage));
-    touch_udp.endPacket();
-    
-    // Serial.printf("[UDP_ADC] Gửi voltage: %.3fV -> %s:%d\n", voltage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    sendUDPPacket(voltageMessage, UDP_PRIORITY_LOW);
 }
 
 // ===== UDP TOUCH UTILITY FUNCTIONS =====
@@ -189,19 +298,24 @@ int receiveUDPData(char* buffer, int bufferSize) {
 }
 
 void handleUDPReceive() {
-    touchActive = isTouchActive();
-    touchDuration = getTouchDuration();
-    
-    // Áp dụng màu hiện tại với touch effect
-    applyColorWithBrightness(touchActive, r, g, b);
     if (!isUDPTouchReady()) {
         return;
+    }
+    
+    // ✅ Chỉ xử lý touch effect mỗi 50ms để giảm load
+    static unsigned long lastTouchUpdate = 0;
+    if (millis() - lastTouchUpdate > 50) {
+        lastTouchUpdate = millis();
+        touchActive = isTouchActive();
+        touchDuration = getTouchDuration();
+        applyColorWithBrightness(touchActive, r, g, b);
     }
     
     int packetSize = touch_udp.parsePacket();
     
     if (packetSize > 0) {
-        Serial.printf("[DEBUG] Có packet size: %d bytes\n", packetSize);
+        // ✅ Chỉ log khi có packet quan trọng
+        // Serial.printf("[DEBUG] Có packet size: %d bytes\n", packetSize);
         
         char buffer[256];
         int bytesRead = touch_udp.read(buffer, sizeof(buffer) - 1);
@@ -212,9 +326,10 @@ void handleUDPReceive() {
             IPAddress remoteIP = touch_udp.remoteIP();
             int remotePort = touch_udp.remotePort();
             
-            Serial.printf("[UDP_RECEIVE] Nhận %d bytes từ %s:%d\n", 
-                         bytesRead, remoteIP.toString().c_str(), remotePort);
-            Serial.printf("[UDP_RECEIVE] Dữ liệu: %s\n", buffer);
+            // ✅ Chỉ log command quan trọng, không log mọi packet
+            // Serial.printf("[UDP_RECEIVE] Nhận %d bytes từ %s:%d\n", 
+            //              bytesRead, remoteIP.toString().c_str(), remotePort);
+            // Serial.printf("[UDP_RECEIVE] Dữ liệu: %s\n", buffer);
             
             String data = String(buffer);
             data.trim();
@@ -247,16 +362,16 @@ void handleUDPReceive() {
                 int xiLanhValue = valueStr.toInt();
                 
                 if (xiLanhValue == 1) {
-                    digitalWrite(17, HIGH);
-                    digitalWrite(18, LOW);
+                    digitalWrite(2, HIGH);
+                    digitalWrite(15, LOW);
                     Serial.println("[UDP_XILANH] IO15 -> HIGH (Xi lanh DOWN)");
                 } else if (xiLanhValue == 2) {
-                    digitalWrite(17, LOW);
-                    digitalWrite(18, HIGH);
+                    digitalWrite(2, LOW);
+                    digitalWrite(15, HIGH);
                     Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh UP)");
                 } else if (xiLanhValue == 0) {
-                    digitalWrite(17, LOW);
-                    digitalWrite(18, LOW);
+                    digitalWrite(2, LOW);
+                    digitalWrite(15, LOW);
                     Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh STOP)");
                 }
                 
@@ -292,21 +407,16 @@ void handleUDPReceive() {
             else if (data.equals("RECALIB")) {
                 Serial.println("[UDP_RECALIB] Bắt đầu quá trình tái hiệu chuẩn...");
                 
-                // Bước 1: Gửi "D"
+                // Reset recalib process
+                recalibStep = 1;
+                recalibStartTime = millis();
+                
+                // Bước 1: Gửi "D" ngay lập tức
                 sendUARTCommand("D");
                 Serial.println("[UDP_RECALIB] Bước 1: Gửi lệnh D");
                 
-                delay(100); // Delay ngắn giữa các lệnh
-                
-                // Bước 2: Gửi "A"  
-                sendUARTCommand("A");
-                Serial.println("[UDP_RECALIB] Bước 2: Gửi lệnh A - Chờ 10 giây...");
-                
-                // Bước 3: Đợi 10 giây rồi gửi "E"
-                delay(10000); // 10 seconds
-                
-                sendUARTCommand("E");
-                Serial.println("[UDP_RECALIB] Bước 3: Gửi lệnh E - Hoàn thành tái hiệu chuẩn!");
+                // Note: Các bước tiếp theo sẽ được xử lý trong processRecalibration()
+                // Cần gọi processRecalibration() trong loop()
             }
             
             // ✅ Xử lý lệnh LED CONTROL
@@ -454,123 +564,104 @@ void handleUDPReceive() {
 // ===== IR ADC UDP FUNCTIONS =====
 // Hàm gửi giá trị IR ADC raw qua UDP (chân 35)
 void sendIRADCValue(uint16_t adcRaw, float adcVoltage) {
-    if (!isUDPTouchReady()) {
-        // Serial.println("[UDP_IR_ADC] Cảnh báo: UDP chưa sẵn sàng!");
-        return;
-    }
-    
-    // Tạo message chứa cả IR ADC raw và voltage
     char irAdcMessage[64];
     snprintf(irAdcMessage, sizeof(irAdcMessage), "IR_ADC_RAW:%d,IR_VOLTAGE:%.3f", adcRaw, adcVoltage);
-    
-    // Gửi UDP packet
-    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
-    touch_udp.write((uint8_t*)irAdcMessage, strlen(irAdcMessage));
-    touch_udp.endPacket();
-    
-    // Serial.printf("[UDP_IR_ADC] Gửi: %s -> %s:%d\n", irAdcMessage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    sendUDPPacket(irAdcMessage, UDP_PRIORITY_LOW);
 }
 
 // Hàm gửi chỉ IR ADC raw (đơn giản hơn)
 void sendIRADCRaw(int index, uint16_t adcRaw) {
-    if (!isUDPTouchReady()) {
-        return;
-    }
-    
-    // Tạo message đơn giản
     char irAdcMessage[32];
     snprintf(irAdcMessage, sizeof(irAdcMessage), "IR_ADC_%d:,%d", index, adcRaw);
-    
-    // Gửi UDP packet
-    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
-    touch_udp.write((uint8_t*)irAdcMessage, strlen(irAdcMessage));
-    touch_udp.endPacket();
-    
-    Serial.printf("[UDP_IR_ADC] Gửi IR ADC_%d raw: %d -> %s:%d\n", index, adcRaw, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    sendUDPPacket(irAdcMessage, UDP_PRIORITY_LOW);
 }
 
 // Hàm gửi chỉ IR voltage (đơn giản hơn)
 void sendIRVoltage(float voltage) {
-    if (!isUDPTouchReady()) {
-        return;
-    }
-    
-    // Tạo message đơn giản
     char irVoltageMessage[32];
     snprintf(irVoltageMessage, sizeof(irVoltageMessage), "IR_VOLTAGE:%.3f", voltage);
-    
-    // Gửi UDP packet
-    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
-    touch_udp.write((uint8_t*)irVoltageMessage, strlen(irVoltageMessage));
-    touch_udp.endPacket();
-    
-    // Serial.printf("[UDP_IR_ADC] Gửi IR voltage: %.3fV -> %s:%d\n", voltage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    sendUDPPacket(irVoltageMessage, UDP_PRIORITY_LOW);
 }
 
 // Hàm gửi IR receive data (chân 35 đọc tín hiệu phản hồi)
 void sendIRReceiveData(uint16_t adcRaw, float voltage) {
-    if (!isUDPTouchReady()) {
-        return;
-    }
-    
-    // Format đặc biệt cho IR receive data
     char irReceiveMessage[64];
     snprintf(irReceiveMessage, sizeof(irReceiveMessage), "IR_RECEIVE:RAW=%d,VOLT=%.3f", adcRaw, voltage);
-    
-    // Gửi UDP packet
-    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
-    touch_udp.write((uint8_t*)irReceiveMessage, strlen(irReceiveMessage));
-    touch_udp.endPacket();
-    
-    Serial.printf("[UDP_IR_RECEIVE] Gửi IR receive data: %s -> %s:%d\n", 
-                 irReceiveMessage, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    sendUDPPacket(irReceiveMessage, UDP_PRIORITY_LOW);
 }
 
 // Hàm gửi chỉ IR ADC raw (đơn giản hơn)
 void sendIRThreshold(int index, uint16_t threshold) {
-    if (!isUDPTouchReady()) {
-        return;
-    }
-    
-    // Tạo message đơn giản
     char irAdcMessage[32];
     snprintf(irAdcMessage, sizeof(irAdcMessage), "IR_THR_%d:,%d", index, threshold);
-    
-    // Gửi UDP packet
-    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
-    touch_udp.write((uint8_t*)irAdcMessage, strlen(irAdcMessage));
-    touch_udp.endPacket();
-    
-    Serial.printf("[UDP_IR_ADC] Gửi IR ADC_%d threshold: %d -> %s:%d\n", index, threshold, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    sendUDPPacket(irAdcMessage, UDP_PRIORITY_LOW);
 }
 
 // Hàm gửi trạng thái mặt qua UDP
 void sendStatusFace(int faceNumber, const char* status) {
-    if (!isUDPTouchReady()) {
+    if (faceNumber < 1 || faceNumber > 6 || status == nullptr) {
         return;
     }
     
-    // Kiểm tra faceNumber hợp lệ (1-6)
-    if (faceNumber < 1 || faceNumber > 6) {
-        Serial.printf("[UDP_FACE] Lỗi: Số mặt không hợp lệ: %d (phải từ 1-6)\n", faceNumber);
-        return;
-    }
-    
-    // Kiểm tra status không null
-    if (status == nullptr) {
-        Serial.println("[UDP_FACE] Lỗi: Status là null!");
-        return;
-    }
-    
-    // Tạo message với format: FACE_<số>:<status>
     char faceMessage[32];
     snprintf(faceMessage, sizeof(faceMessage), "FACE_%d:%s", faceNumber, status);
-    
-    // Gửi UDP packet
-    touch_udp.beginPacket(touch_server_address, TOUCH_SERVER_PORT);
-    touch_udp.write((uint8_t*)faceMessage, strlen(faceMessage));
-    touch_udp.endPacket();
-    
-    Serial.printf("[UDP_FACE] Gửi trạng thái Mặt %d: %s -> %s:%d\n", 
-                 faceNumber, status, TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    sendUDPPacket(faceMessage, UDP_PRIORITY_HIGH);  // Ưu tiên cao cho face status
 }
+
+// Hàm gửi heading compass qua UDP
+void sendCompassHeading(float heading, const char* direction) {
+    if (direction == nullptr) {
+        return;
+    }
+    
+    char compassMessage[64];
+    snprintf(compassMessage, sizeof(compassMessage), "COMPASS:%.1f,%s", heading, direction);
+    sendUDPPacket(compassMessage, UDP_PRIORITY_NORMAL);  // Ưu tiên bình thường
+}
+
+// Hàm gửi dữ liệu thô magnetometer qua UDP
+void sendCompassRaw(int16_t mx, int16_t my, int16_t mz) {
+    char magMessage[64];
+    snprintf(magMessage, sizeof(magMessage), "MAG:%d,%d,%d", mx, my, mz);
+    sendUDPPacket(magMessage, UDP_PRIORITY_LOW);  // Ưu tiên thấp (raw data)
+}
+
+// ===== RECALIBRATION NON-BLOCKING HANDLER =====
+void processRecalibration() {
+    if (recalibStep == 0) {
+        return;  // Không có recalibration đang chạy
+    }
+    
+    unsigned long currentTime = millis();
+    unsigned long elapsed = currentTime - recalibStartTime;
+    
+    switch (recalibStep) {
+        case 1:
+            // Bước 1 đã gửi "D", chờ 100ms rồi gửi "A"
+            if (elapsed >= 100) {
+                sendUARTCommand("A");
+                Serial.println("[UDP_RECALIB] Bước 2: Gửi lệnh A - Chờ 10 giây...");
+                recalibStep = 2;
+                recalibStartTime = currentTime;  // Reset timer
+            }
+            break;
+            
+        case 2:
+            // Đang chờ 10 giây
+            if (elapsed >= 10000) {
+                sendUARTCommand("E");
+                Serial.println("[UDP_RECALIB] Bước 3: Gửi lệnh E - Hoàn thành tái hiệu chuẩn!");
+                recalibStep = 0;  // Done
+            } else {
+                // In progress mỗi 2 giây
+                static unsigned long lastProgressPrint = 0;
+                if (currentTime - lastProgressPrint > 2000) {
+                    lastProgressPrint = currentTime;
+                    int remaining = (10000 - elapsed) / 1000;
+                    Serial.printf("[UDP_RECALIB] Đang chờ... còn %d giây\n", remaining);
+                }
+            }
+            break;
+    }
+}
+

@@ -11,6 +11,11 @@ int numOfSensor = 2;
 int rawAdcValue = 0;
 int thresholdValue = 2000;
 
+// Biến lưu giá trị ADC trước đó để phát hiện thay đổi
+uint16_t lastRawValue_1 = 0;
+uint16_t lastRawValue_2 = 0;
+const uint16_t ADC_CHANGE_THRESHOLD = 100;  // Ngưỡng thay đổi tối thiểu (100/4095 ~ 2.4%)
+
 // Biến lưu trạng thái trước đó để phát hiện swipe
 struct SwipeDetector {
     bool pin1WasActive;
@@ -126,13 +131,23 @@ void handleIRModule() {
     // Đọc giá trị từ 2 pin (Pin 1 và Pin 2 tạo thành Mặt 1)
     float inputVoltage_1 = analogReadVoltage(ANALOG_READ_PIN_1);
     uint16_t rawValue_1 = analogReadRaw(ANALOG_READ_PIN_1);
-    sendIRADCRaw(1, rawValue_1);
-    sendIRThreshold(1, thresholdValue);
+    
+    // Chỉ gửi nếu thay đổi > ngưỡng
+    if (abs((int)rawValue_1 - (int)lastRawValue_1) > ADC_CHANGE_THRESHOLD) {
+        sendIRADCRaw(1, rawValue_1);
+        lastRawValue_1 = rawValue_1;
+    }
+    // sendIRThreshold(1, thresholdValue);  // Bỏ qua để giảm UDP traffic
     
     float inputVoltage_2 = analogReadVoltage(ANALOG_READ_PIN_2);
     uint16_t rawValue_2 = analogReadRaw(ANALOG_READ_PIN_2);
-    sendIRADCRaw(2, rawValue_2);
-    sendIRThreshold(2, thresholdValue);
+    
+    // Chỉ gửi nếu thay đổi > ngưỡng
+    if (abs((int)rawValue_2 - (int)lastRawValue_2) > ADC_CHANGE_THRESHOLD) {
+        sendIRADCRaw(2, rawValue_2);
+        lastRawValue_2 = rawValue_2;
+    }
+    // sendIRThreshold(2, thresholdValue);  // Bỏ qua để giảm UDP traffic
     
     // Cập nhật trạng thái Pin
     bool pin1Active = (rawValue_1 > thresholdValue);
