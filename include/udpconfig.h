@@ -13,7 +13,8 @@ enum UDPPriority {
 };
 
 // ===== UDP TOUCH CONFIGURATION =====
-extern const char* TOUCH_SERVER_IP;
+// SERVER_IP từ main.h
+// TOUCH_SERVER_PORT tính theo IP (lastOctet * 100)
 extern int TOUCH_SERVER_PORT;
 extern int LOCAL_TOUCH_PORT;
 
@@ -100,6 +101,16 @@ void sendCompassHeading(float heading, const char* direction);
  * Ví dụ: "MAG:-147,-1430,110"
  */
 void sendCompassRaw(int16_t mx, int16_t my, int16_t mz);
+
+/**
+ * Gửi tốc độ motor qua UDP
+ * @param s1 Tốc độ motor 1
+ * @param s2 Tốc độ motor 2
+ * @param s3 Tốc độ motor 3
+ * Format: "SPEED:s1,s2,s3"
+ * Ví dụ: "SPEED:100,150,200"
+ */
+void sendSpeed(int16_t s1, int16_t s2, int16_t s3);
 
 /**
  * Kiểm tra trạng thái kết nối UDP Touch

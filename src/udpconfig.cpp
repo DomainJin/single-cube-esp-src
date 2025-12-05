@@ -25,10 +25,8 @@ int queueTail = 0;
 int queueCount = 0;
 
 // ===== UDP TOUCH CONFIGURATION =====
-// const char* TOUCH_SERVER_IP = "192.168.0.159";
-const char* TOUCH_SERVER_IP = "192.168.1.150";
-// Port sẽ được tính tự động từ local IP
-int TOUCH_SERVER_PORT = 7043;  // Giá trị mặc định, sẽ được cập nhật
+// SERVER_IP và SERVER_PORT lấy từ main.h
+int TOUCH_SERVER_PORT = 0;     // Port được tính theo IP (lastOctet * 100)
 int LOCAL_TOUCH_PORT = 8001;   // Giá trị mặc định, sẽ được cập nhật
 
 // ===== GLOBAL UDP TOUCH OBJECTS =====
@@ -48,8 +46,8 @@ void calculatePortsFromLocalIP() {
     // Lấy 8 bit cuối (octet thứ 4) của IP
     uint8_t lastOctet = localIP[3];
     
-    // Tính port = lastOctet * 100
-    // Ví dụ: IP 192.168.0.43 → lastOctet = 43 → port = 4300
+    // Tính TOUCH_SERVER_PORT = lastOctet * 100
+    // Ví dụ: IP 192.168.0.43 → lastOctet = 43 → TOUCH_SERVER_PORT = 4300
     TOUCH_SERVER_PORT = lastOctet * 100;
     LOCAL_TOUCH_PORT = lastOctet * 100;
     
@@ -87,11 +85,11 @@ bool initUDPTouch() {
         return false;
     }
     
-    // Thiết lập địa chỉ Touch Server
-    touch_server_address.fromString(TOUCH_SERVER_IP);
+    // Thiết lập địa chỉ Touch Server từ main.h
+    touch_server_address.fromString(SERVER_IP);
     
     Serial.printf("[UDP_TOUCH] Local UDP Port: %d\n", LOCAL_TOUCH_PORT);
-    Serial.printf("[UDP_TOUCH] Touch Server: %s:%d\n", TOUCH_SERVER_IP, TOUCH_SERVER_PORT);
+    Serial.printf("[UDP_TOUCH] Touch Server: %s:%d (calculated from IP)\n", SERVER_IP, TOUCH_SERVER_PORT);
     Serial.println("[UDP_TOUCH] UDP Touch module sẵn sàng!");
     
     return true;
@@ -668,3 +666,10 @@ void processRecalibration() {
     }
 }
 
+// Hàm gửi tốc độ motor qua UDP
+void sendSpeed(int16_t s1, int16_t s2, int16_t s3) {
+    char speedMessage[64];
+    snprintf(speedMessage, sizeof(speedMessage), "SPEED:%d,%d,%d", s1, s2, s3);
+    Serial.printf("[UDP_SPEED] Sending: %s\n", speedMessage);  // DEBUG
+    sendUDPPacket(speedMessage, UDP_PRIORITY_NORMAL);  // ✅ Ưu tiên NORMAL (giống COMPASS)
+}

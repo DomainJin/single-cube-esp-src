@@ -1,5 +1,6 @@
 #include "ipconfig.h"
 #include "udpconfig.h"  // Để dùng sendUDPPacket với priority
+#include "main.h"       // Để dùng SERVER_IP và SERVER_PORT
 
 // ===== GLOBAL IP CONFIG OBJECTS =====
 WiFiUDP heartbeat_udp;
@@ -41,7 +42,7 @@ bool initIPConfig() {
     }
     
     // Thiết lập địa chỉ Heartbeat Server
-    heartbeat_server_address.fromString(HEARTBEAT_SERVER_IP);
+    heartbeat_server_address.fromString(SERVER_IP);
     
     // Sử dụng device_name thay vì MAC address
     esp_identifier = device_name;
@@ -50,7 +51,7 @@ bool initIPConfig() {
     lastHeartbeatTime = 0;  // Gửi heartbeat ngay lần đầu
     
     Serial.printf("[IPCONFIG] ✅ Heartbeat Local Port: %d (DYNAMIC - No Conflict!)\n", heartbeat_local_port);
-    Serial.printf("[IPCONFIG] Heartbeat Server: %s:%d\n", HEARTBEAT_SERVER_IP, HEARTBEAT_SERVER_PORT);
+    Serial.printf("[IPCONFIG] Heartbeat Server: %s:%d\n", SERVER_IP, SERVER_PORT);
     Serial.printf("[IPCONFIG] Device Name: %s\n", device_name.c_str());
     Serial.printf("[IPCONFIG] ESP Identifier: %s\n", esp_identifier.c_str());
     Serial.printf("[IPCONFIG] Local IP: %s\n", localIP.toString().c_str());
@@ -81,12 +82,12 @@ void sendHeartbeat() {
              localIP.c_str());
     
     // Gửi với priority CRITICAL và immediate = true
-    heartbeat_udp.beginPacket(heartbeat_server_address, HEARTBEAT_SERVER_PORT);
+    heartbeat_udp.beginPacket(heartbeat_server_address, SERVER_PORT);
     heartbeat_udp.write((uint8_t*)heartbeatMessage, strlen(heartbeatMessage));
     heartbeat_udp.endPacket();
     
     Serial.printf("[HEARTBEAT] Gửi: %s -> %s:%d\n", 
-                 heartbeatMessage, HEARTBEAT_SERVER_IP, HEARTBEAT_SERVER_PORT);
+                 heartbeatMessage, SERVER_IP, SERVER_PORT);
 }
 
 void handleHeartbeat() {
@@ -122,7 +123,7 @@ void sendCustomHeartbeat(const String& customMessage) {
              localIP.c_str(),
              customMessage.c_str());
     
-    heartbeat_udp.beginPacket(heartbeat_server_address, HEARTBEAT_SERVER_PORT);
+    heartbeat_udp.beginPacket(heartbeat_server_address, SERVER_PORT);
     heartbeat_udp.write((uint8_t*)heartbeatMessage, strlen(heartbeatMessage));
     heartbeat_udp.endPacket();
     
@@ -142,7 +143,7 @@ void sendESPStatus(const String& status) {
              localIP.c_str(),
              status.c_str());
     
-    heartbeat_udp.beginPacket(heartbeat_server_address, HEARTBEAT_SERVER_PORT);
+    heartbeat_udp.beginPacket(heartbeat_server_address, SERVER_PORT);
     heartbeat_udp.write((uint8_t*)statusMessage, strlen(statusMessage));
     heartbeat_udp.endPacket();
     

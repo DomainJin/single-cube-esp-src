@@ -6,10 +6,7 @@
 #include <WiFiUdp.h>
 
 // ===== IP CONFIG CONFIGURATION =====
-#define HEARTBEAT_SERVER_IP "192.168.1.150"
-#define HEARTBEAT_SERVER_PORT 1509
-// ❌ KHÔNG dùng port cố định nữa - sẽ tính động theo IP trong initIPConfig()
-// #define HEARTBEAT_LOCAL_PORT 8002  
+// Server IP và Port lấy từ main.h (SERVER_IP, SERVER_PORT)
 #define HEARTBEAT_INTERVAL 1000  // ✅ 1 giây (gửi thường xuyên hơn để tránh timeout)
 
 // ===== IP CONFIG FUNCTIONS =====

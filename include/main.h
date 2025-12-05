@@ -12,12 +12,17 @@
 #include "udpconfig.h"
 #include "IR.h"
 #include "ipconfig.h"
+#include "motor.h"
 
 // ===== CONFIGURATION =====
 
 // WiFi Configuration
 extern const char* ssid;
 extern const char* password;
+
+// Server Configuration - Chung cho tất cả modules
+extern const char* SERVER_IP;        // IP server nhận UDP (Touch, Heartbeat, Compass, IR)
+extern int SERVER_PORT;              // Port server nhận UDP
 
 
 /**
