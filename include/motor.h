@@ -53,8 +53,9 @@
 // ============================================
 // ENCODER CONFIGURATION
 // ============================================
-#define ENCODER_PPR     20    // Pulses Per Revolution (tùy encoder của bạn)
+#define ENCODER_PPR     11    // Pulses Per Revolution - Encoder 11 xung
 #define ENCODER_DEBOUNCE_MS  2   // Thời gian chống nhiễu (ms)
+#define MOTOR_GEAR_RATIO 30.0f   // Tỷ số truyền 1:30
 
 // ============================================
 // MOTOR STRUCTURE

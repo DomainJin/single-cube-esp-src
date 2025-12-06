@@ -89,6 +89,10 @@ void setup() {
     setupMotors();
     Serial.println("[SETUP] Motor control system initialized!");
     
+    // ✅ Khởi tạo Omni Robot System
+    setupOmni();
+    Serial.println("[SETUP] Omni robot system initialized!");
+    
     // Khởi tạo MPU6050
     // if (mpu.begin()) {
     //     Serial.println("MPU6050 đã khởi tạo thành công!");
@@ -163,6 +167,24 @@ void loop() {
     handleHeartbeat();
     handleIRModule();
     
+    // ✅ Update Omni Robot (MUST BE CALLED IN LOOP!)
+    updateOmni();
+    
+    // ✅ Gửi SPEED mỗi 500ms để realtime
+    static unsigned long lastSpeedSend = 0;
+    if (millis() - lastSpeedSend > 500) {
+        lastSpeedSend = millis();
+        
+        // ✅ Lấy RPM từ omni_state thay vì gọi getMotorRPM() lại (tránh conflict)
+        OmniRobotState* omni = getOmniState();
+        float rpm1 = omni->wheel_rpm[0];
+        float rpm2 = omni->wheel_rpm[1];
+        float rpm3 = omni->wheel_rpm[2];
+        
+        // Gửi tốc độ motor qua UDP
+        sendSpeed((int16_t)rpm1, (int16_t)rpm2, (int16_t)rpm3);
+    }
+    
     // ===== TEST QMC5883L =====
     static unsigned long lastSensorRead = 0;
     if (millis() - lastSensorRead > 500) {  // Đọc mỗi 500ms
@@ -190,73 +212,6 @@ void loop() {
         }
     }
     
-    // ===== TEST MOTOR & ENCODER =====
-    static unsigned long lastMotorTest = 0;
-    static int testState = 0;
-    
-    if (millis() - lastMotorTest > 3000) {  // Test mỗi 3 giây
-        lastMotorTest = millis();
-        
-        switch(testState) {
-            case 0:
-                // Test Motor 1 - Tiến với tốc độ 150
-                Serial.println("[TEST] Motor 1 FORWARD speed 150");
-                setMotorSpeed(motor1, 150, MOTOR_FORWARD);
-                testState = 1;
-                break;
-                
-            case 1:
-                // Dừng Motor 1, test Motor 2 - Lùi với tốc độ 150
-                Serial.println("[TEST] Motor 1 STOP, Motor 2 BACKWARD speed 150");
-                stopMotor(motor1);
-                setMotorSpeed(motor2, 150, MOTOR_BACKWARD);
-                testState = 2;
-                break;
-                
-            case 2:
-                // Dừng Motor 2, test Motor 3 - Tiến với tốc độ 200
-                Serial.println("[TEST] Motor 2 STOP, Motor 3 FORWARD speed 200");
-                stopMotor(motor2);
-                setMotorSpeed(motor3, 200, MOTOR_FORWARD);
-                testState = 3;
-                break;
-                
-            case 3:
-                // Dừng tất cả và in status
-                Serial.println("[TEST] All motors STOP");
-                stopMotor(motor1);
-                stopMotor(motor2);
-                stopMotor(motor3);
-                printAllMotorStatus();
-                testState = 0;
-                break;
-        }
-    }
-    
-    // ✅ Gửi SPEED mỗi 500ms để realtime (đủ cho getMotorRPM tính toán)
-    static unsigned long lastSpeedSend = 0;
-    if (millis() - lastSpeedSend > 500) {
-        lastSpeedSend = millis();
-        
-        // Lấy RPM values
-        float rpm1 = getMotorRPM(motor1);
-        float rpm2 = getMotorRPM(motor2);
-        float rpm3 = getMotorRPM(motor3);
-        
-        // Gửi tốc độ motor qua UDP
-        sendSpeed((int16_t)rpm1, (int16_t)rpm2, (int16_t)rpm3);
-        
-        // ✅ Chỉ print debug mỗi 5 giây để giảm Serial spam
-        static unsigned long lastDebugPrint = 0;
-        if (millis() - lastDebugPrint > 5000) {
-            lastDebugPrint = millis();
-            Serial.println("===== ENCODER STATUS =====");
-            Serial.printf("Motor 1: Count=%ld, RPM=%.2f\n", getEncoderCount(motor1), rpm1);
-            Serial.printf("Motor 2: Count=%ld, RPM=%.2f\n", getEncoderCount(motor2), rpm2);
-            Serial.printf("Motor 3: Count=%ld, RPM=%.2f\n", getEncoderCount(motor3), rpm3);
-            Serial.println("==========================");
-        }
-    }
     
     
     delay(10);  // Giảm delay xuống 10ms để responsive hơn

@@ -4,8 +4,8 @@
 QMC5883L::QMC5883L() {
     magX = magY = magZ = 0;
     declinationAngle = 0.0;
-    sdaPin = 21;
-    sclPin = 22;
+    sdaPin = 16;
+    sclPin = 17;
 }
 
 bool QMC5883L::begin(uint8_t sda, uint8_t scl) {

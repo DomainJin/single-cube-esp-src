@@ -13,6 +13,7 @@
 #include "IR.h"
 #include "ipconfig.h"
 #include "motor.h"
+#include "omni.h"  // ✅ Add omni robot control header
 
 // ===== CONFIGURATION =====
 

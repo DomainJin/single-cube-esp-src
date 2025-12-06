@@ -50,6 +50,17 @@ void sendTouchValueInt(int touchValue);
 void sendIRADCValue(uint16_t adcRaw, float adcVoltage);    // Gửi cả IR ADC raw và voltage
 
 /**
+ * Gửi tọa độ robot qua UDP để server cập nhật lên map
+ * @param x Tọa độ X (m)
+ * @param y Tọa độ Y (m)
+ * @param heading Hướng robot (radians)
+ * @param vx Vận tốc X (m/s)
+ * @param vy Vận tốc Y (m/s)
+ * @param omega Vận tốc góc (rad/s)
+ */
+void sendRobotPosition(float x, float y, float heading, float vx, float vy, float omega);
+
+/**
  * Gửi giá trị ADC qua UDP
  * @param adcRaw Giá trị ADC thô
  * @param adcVoltage Giá trị điện áp tương ứng

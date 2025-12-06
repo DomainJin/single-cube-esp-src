@@ -247,7 +247,8 @@ float getMotorRPM(Motor& motor) {
     }
     
     // Tính RPM dựa trên encoder count
-    // RPM = (encoder_count / ENCODER_PPR) * (60 / time_in_seconds)
+    // RPM_encoder = (encoder_count / ENCODER_PPR) * (60 / time_in_seconds)
+    // RPM_wheel = RPM_encoder / GEAR_RATIO
     
     static unsigned long last_time[3] = {0, 0, 0};
     static long last_count[3] = {0, 0, 0};
@@ -263,12 +264,21 @@ float getMotorRPM(Motor& motor) {
     }
     
     long count_diff = current_count - last_count[motor_id];
-    float rpm = (count_diff * 60000.0) / (ENCODER_PPR * time_diff);
+    float rpm_encoder = (count_diff * 60000.0) / (ENCODER_PPR * time_diff);
+    
+    // ✅ Chia cho tỷ số truyền để ra RPM bánh xe
+    float rpm_wheel = rpm_encoder / MOTOR_GEAR_RATIO;
+    
+    // ✅ DEBUG: In encoder info
+    if (motor.current_speed > 0) {
+        Serial.printf("[MOTOR_%d] Encoder: %ld (diff: %ld), Time: %lums, Speed: %d, RPM_enc: %.1f, RPM_wheel: %.1f\n", 
+                      motor.id, current_count, count_diff, time_diff, motor.current_speed, rpm_encoder, rpm_wheel);
+    }
     
     last_time[motor_id] = current_time;
     last_count[motor_id] = current_count;
     
-    return rpm;
+    return rpm_wheel;  // ✅ Trả về RPM bánh xe
 }
 
 // ============================================

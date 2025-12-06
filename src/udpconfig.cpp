@@ -1,6 +1,8 @@
 #include "main.h"
 #include "IR.h"
 #include "a4l.h"
+#include "omni.h"  // ✅ Add omni robot control
+#include <stdio.h>
 
 // ===== UDP SEND CONTROL =====
 SemaphoreHandle_t udpMutex = NULL;  // Mutex để đồng bộ gửi UDP
@@ -37,6 +39,10 @@ IPAddress touch_server_address;
 bool touchActive = false;
 unsigned long touchDuration = 0;
 int r,g,b;
+
+// ===== ROBOT POSITION TRACKING =====
+static unsigned long lastPositionSendTime = 0;
+const unsigned long POSITION_SEND_INTERVAL_MS = 100;  // Gửi tọa độ mỗi 100ms (10Hz)
 
 // ===== DYNAMIC PORT CALCULATION =====
 void calculatePortsFromLocalIP() {
@@ -256,6 +262,40 @@ void sendADCVoltage(float voltage) {
     char voltageMessage[32];
     snprintf(voltageMessage, sizeof(voltageMessage), "VOLTAGE:%.3f", voltage);
     sendUDPPacket(voltageMessage, UDP_PRIORITY_LOW);
+}
+
+// ===== ROBOT POSITION FUNCTIONS =====
+/**
+ * @brief Gửi tọa độ robot qua UDP để server cập nhật lên map
+ * @param x Tọa độ X (m)
+ * @param y Tọa độ Y (m)
+ * @param heading Hướng robot (radians)
+ * @param vx Vận tốc X (m/s)
+ * @param vy Vận tốc Y (m/s)
+ * @param omega Vận tốc góc (rad/s)
+ * 
+ * Format message: "POS:x,y,heading,vx,vy,omega"
+ * Ví dụ: "POS:1.234,2.567,1.571,0.5,0.0,0.3"
+ */
+void sendRobotPosition(float x, float y, float heading, float vx, float vy, float omega) {
+    // Throttle: chỉ gửi mỗi POSITION_SEND_INTERVAL_MS
+    unsigned long currentTime = millis();
+    if (currentTime - lastPositionSendTime < POSITION_SEND_INTERVAL_MS) {
+        return;
+    }
+    lastPositionSendTime = currentTime;
+    
+    // Tạo message với format CSV
+    char posMessage[128];
+    snprintf(posMessage, sizeof(posMessage), 
+             "POS:%.3f,%.3f,%.3f,%.3f,%.3f,%.3f", 
+             x, y, heading, vx, vy, omega);
+    
+    // Gửi với ưu tiên NORMAL
+    sendUDPPacket(posMessage, UDP_PRIORITY_NORMAL);
+    
+    // ✅ Debug log (ALWAYS ON để kiểm tra)
+    Serial.printf("[UDP_POS] Sent: %s\n", posMessage);
 }
 
 // ===== UDP TOUCH UTILITY FUNCTIONS =====
@@ -546,6 +586,45 @@ void handleUDPReceive() {
                 
                 else {
                     Serial.printf("[UDP_A4L] Giá trị không hợp lệ: %d (chỉ chấp nhận 0 hoặc 1)\n", a4l);
+                }
+            }
+            
+            // ✅ Xử lý lệnh MOVE (OMNI ROBOT CONTROL)
+            else if (data.startsWith("MOVE:")) {
+                int colonPos = data.indexOf(':');
+                String direction = data.substring(colonPos + 1);
+                direction.trim();
+                
+                Serial.printf("[UDP_MOVE] Received direction: %s\n", direction.c_str());
+                
+                // Enable omni robot
+                setOmniEnabled(true);
+                
+                // Default speed - Tăng tốc để motor chạy đủ mạnh
+                float speed = 50.0f; // 50 cm/s
+                
+                if (direction == "FORWARD") {
+                    omniForward(speed);
+                    Serial.println("[UDP_MOVE] ⬆️ Moving FORWARD");
+                } 
+                else if (direction == "BACKWARD") {
+                    omniForward(-speed);
+                    Serial.println("[UDP_MOVE] ⬇️ Moving BACKWARD");
+                } 
+                else if (direction == "LEFT") {
+                    omniStrafe(-speed);
+                    Serial.println("[UDP_MOVE] ⬅️ Moving LEFT (strafe)");
+                } 
+                else if (direction == "RIGHT") {
+                    omniStrafe(speed);
+                    Serial.println("[UDP_MOVE] ➡️ Moving RIGHT (strafe)");
+                } 
+                else if (direction == "STOP") {
+                    omniStop();
+                    Serial.println("[UDP_MOVE] 🛑 STOP");
+                } 
+                else {
+                    Serial.printf("[UDP_MOVE] ❌ Unknown direction: %s\n", direction.c_str());
                 }
             }
         }
