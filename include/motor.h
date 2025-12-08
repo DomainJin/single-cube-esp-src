@@ -11,7 +11,7 @@
 #define MOTOR_1_IN1       4   // GPIO 4  - OUTPUT PWM
 #define MOTOR_1_IN2       13  // GPIO 13 - OUTPUT PWM
 #define MOTOR_1_ENCODER_A 14  // GPIO 14 - INPUT
-#define MOTOR_1_ENCODER_B 32  // GPIO 32 - INPUT (có ADC)
+#define MOTOR_1_ENCODER_B 27  // GPIO 27 - INPUT (✅ Đổi từ GPIO 32 để tránh xung đột ADC1 với IR)
 
 // ĐỘNG CƠ 2 - Cụm chân GIỮA board
 #define MOTOR_2_IN1       18  // GPIO 18 - OUTPUT PWM

@@ -4,7 +4,7 @@
 
 #define Button_Next_Pin 25
 #define Button_SyncMode 26
-#define Button_HDMI_Mode 27
+#define Button_HDMI_Mode 12  // ✅ Đổi từ GPIO 27 (swap với Motor 1 Encoder B)
 // ===== A4L FUNCTIONS =====
 
 void a4lInit();
