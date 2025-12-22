@@ -21,18 +21,19 @@
 
 // Cấu hình vật lý robot
 // Bánh xe: đường kính 100mm → bán kính 50mm
-// Tam giác đều cạnh 40cm → bán kính nội tiếp R = a/(2√3) = 40/(2√3) ≈ 11.547cm
-#define OMNI_WHEEL_RADIUS       0.050f      // Bán kính bánh xe (m) - 50mm
-#define OMNI_ROBOT_RADIUS       0.23094f    // Bán kính robot (m) - từ tâm đến bánh xe
-                                            // Công thức: R = cạnh_tam_giác / √3 = 0.4 / 1.732 = 0.23094m
-#define OMNI_GEAR_RATIO         30.0f       // Tỷ số truyền 1:30
+// Tam giác đều cạnh 40cm → bán kính nội tiếp R = a/(2√3) = 40/(2√3) ≈ 0.231m
+#define OMNI_WHEEL_RADIUS       0.05f      // Bán kính bánh xe (m) - 50mm
+#define OMNI_ROBOT_RADIUS       0.231f      // Bán kính robot (m) - từ tâm đến bánh xe
+                                             // Công thức: R = cạnh_tam_giác / √3 = 0.4 / 1.732 = 0.231m
+#define OMNI_GEAR_RATIO         19.2f       // Tỷ số truyền 1:19.2
 #define OMNI_MAX_SPEED          255         // PWM max (0-255)
-#define OMNI_MIN_SPEED          60          // PWM min để bù voltage drop L298N (~2V)
-#define OMNI_MAX_WHEEL_RPM      333.0f      // RPM max của bánh xe (theo spec)
+#define OMNI_MIN_SPEED          30          // PWM min để bù voltage drop L298N (~2V) - reduced for finer control
+#define OMNI_MAX_WHEEL_RPM      25.0f       // RPM max của bánh xe (469 RPM motor / 19.2 gear = 24.4 RPM)
 
 // Góc đặt bánh xe (degree) - Standard Y-shape configuration
 // Motor đặt cân đối 120° nhau, với Motor 1 ở phía trước
-#define OMNI_MOTOR1_ANGLE       90.0f       // Motor 1: 90° (front, trục X+)
+// ✅ UPDATED: Sử dụng giá trị chính xác để ánh xạ tốc độ lệnh (cm/s) → RPM thực tế
+#define OMNI_MOTOR1_ANGLE       90.0f       // Motor 1: 90° (front, trục Y+)
 #define OMNI_MOTOR2_ANGLE       210.0f      // Motor 2: 210° (back-left)
 #define OMNI_MOTOR3_ANGLE       330.0f      // Motor 3: 330° (back-right)
 

@@ -89,9 +89,39 @@ void setup() {
     setupMotors();
     Serial.println("[SETUP] Motor control system initialized!");
     
+    // ✅ Cấu hình và bật PID cho cả 3 motor (Kp cao để bù tải)
+    setMotorPID(motor1, 2.0, 0.1, 0.02);  // Tăng Kp để bù tải tốt hơn
+    setMotorPID(motor2, 2.0, 0.1, 0.02);
+    setMotorPID(motor3, 2.0, 0.1, 0.02);
+    
+    enableMotorPID(motor1, false);  // Tắt vì encoder không hoạt động
+    enableMotorPID(motor2, true);
+    enableMotorPID(motor3, false);  // Tắt vì encoder không hoạt động
+    Serial.println("[SETUP] Motor PID enabled (only M2)!");
+    
+    // ✅ Tạo PID task để cập nhật liên tục
+    xTaskCreate(
+        motorControlTask,     // Task function
+        "MotorPID",          // Task name
+        4096,                // Stack size
+        NULL,                // Parameters
+        1,                   // Priority
+        NULL                 // Task handle
+    );
+    Serial.println("[SETUP] Motor PID task created!");
+    
     // ✅ Khởi tạo Omni Robot System
     setupOmni();
     Serial.println("[SETUP] Omni robot system initialized!");
+    
+    // ✅ Test encoder ngay sau khi setup
+    delay(1000);
+    Serial.println("\n========== ENCODER TEST ==========");
+    Serial.printf("Motor 1 encoder count: %ld\n", getEncoderCount(motor1));
+    Serial.printf("Motor 2 encoder count: %ld\n", getEncoderCount(motor2));
+    Serial.printf("Motor 3 encoder count: %ld\n", getEncoderCount(motor3));
+    Serial.println("(Should be 0 when motor stopped)");
+    Serial.println("==================================\n");
     
     // Khởi tạo MPU6050
     // if (mpu.begin()) {
@@ -167,6 +197,9 @@ void loop() {
     handleHeartbeat();
     handleIRModule();
     
+    // ✅ Debug encoder liên tục (phát hiện ngoại lực tác động)
+    debugEncoderContinuous();
+    
     // ✅ Update Omni Robot (MUST BE CALLED IN LOOP!)
     updateOmni();
     
@@ -204,11 +237,11 @@ void loop() {
             sendCompassRaw(mx, my, mz);                      // Gửi raw mag data
             
             // In kết quả
-            Serial.println("========================================");
-            Serial.printf("QMC5883L Mag: X=%d, Y=%d, Z=%d\n", mx, my, mz);
-            Serial.printf("Heading: %.1f°\n", heading);
-            Serial.printf("Direction: %s\n", direction.c_str());
-            Serial.println("========================================");
+            // Serial.println("========================================");
+            // Serial.printf("QMC5883L Mag: X=%d, Y=%d, Z=%d\n", mx, my, mz);
+            // Serial.printf("Heading: %.1f°\n", heading);
+            // Serial.printf("Direction: %s\n", direction.c_str());
+            // Serial.println("========================================");
         }
     }
     

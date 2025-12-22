@@ -62,21 +62,44 @@ void updateOmni() {
     static unsigned long last_debug = 0;
     if (current_time - last_debug > 1000) {  // Log mỗi 1 giây
         last_debug = current_time;
-        Serial.printf("[OMNI] Target: vx=%.3f vy=%.3f omega=%.3f\n",
-                      omni_state.target_vx, omni_state.target_vy, omni_state.target_omega);
-        Serial.printf("[OMNI] Wheel speeds (m/s): [%.3f, %.3f, %.3f]\n",
-                      wheel_speeds[0], wheel_speeds[1], wheel_speeds[2]);
-        Serial.printf("[OMNI] PWM: [%d, %d, %d]\n",
-                      omni_state.wheel_pwm[0], omni_state.wheel_pwm[1], omni_state.wheel_pwm[2]);
+        // Serial.printf("[OMNI] Target: vx=%.3f vy=%.3f omega=%.3f\n",
+        //               omni_state.target_vx, omni_state.target_vy, omni_state.target_omega);
+        // Serial.printf("[OMNI] Wheel speeds (m/s): [%.3f, %.3f, %.3f]\n",
+        //               wheel_speeds[0], wheel_speeds[1], wheel_speeds[2]);
+        // Serial.printf("[OMNI] PWM: [%d, %d, %d]\n",
+        //               omni_state.wheel_pwm[0], omni_state.wheel_pwm[1], omni_state.wheel_pwm[2]);
     }
     
-    // 3. Điều khiển motors - SỬA: dùng MOTOR_FORWARD/MOTOR_BACKWARD thay vì true/false
-    setMotorSpeed(motor1, abs(omni_state.wheel_pwm[0]), 
-                  omni_state.wheel_pwm[0] >= 0 ? MOTOR_FORWARD : MOTOR_BACKWARD);
-    setMotorSpeed(motor2, abs(omni_state.wheel_pwm[1]), 
-                  omni_state.wheel_pwm[1] >= 0 ? MOTOR_FORWARD : MOTOR_BACKWARD);
-    setMotorSpeed(motor3, abs(omni_state.wheel_pwm[2]), 
-                  omni_state.wheel_pwm[2] >= 0 ? MOTOR_FORWARD : MOTOR_BACKWARD);
+    // 3. Điều khiển motors với PID - CHỈ update khi PWM thay đổi (tránh reset PID)
+    static int last_pwm[3] = {0, 0, 0};
+    static unsigned long last_update_time[3] = {0, 0, 0};
+    unsigned long now = millis();
+    
+    for (int i = 0; i < 3; i++) {
+        int new_pwm = abs(omni_state.wheel_pwm[i]);
+        int direction = omni_state.wheel_pwm[i] >= 0 ? MOTOR_FORWARD : MOTOR_BACKWARD;
+        
+        // Chỉ update nếu:
+        // 1. PWM thay đổi đáng kể (>10 để tránh noise)
+        // 2. Direction thay đổi
+        // 3. Đã quá 500ms chưa update (refresh định kỳ)
+        bool pwm_changed = abs(new_pwm - abs(last_pwm[i])) > 10;
+        bool dir_changed = (new_pwm > 0 && last_pwm[i] < 0) || (new_pwm < 0 && last_pwm[i] > 0);
+        bool need_refresh = (now - last_update_time[i]) > 500;
+        
+        if (pwm_changed || dir_changed || (need_refresh && new_pwm > 0)) {
+            Motor* motors[] = {&motor1, &motor2, &motor3};
+            
+            // ✅ Chạy trực tiếp bằng PWM (không dùng PID vì encoder hỏng)
+            setMotorSpeed(*motors[i], new_pwm, direction);
+            
+            last_pwm[i] = omni_state.wheel_pwm[i];
+            last_update_time[i] = now;
+            
+            Serial.printf("[OMNI] M%d: PWM=%d dir=%d (no PID)\n", 
+                          i+1, new_pwm, direction);
+        }
+    }
     
     // 4. Đọc encoder và tính vận tốc thực tế (CHỈ mỗi 100ms để tránh trả về 0)
     static unsigned long last_rpm_update = 0;
@@ -158,9 +181,9 @@ int omniSpeedToPWM(float wheel_speed) {
     
     float rpm = (wheel_speed / (2.0f * PI * OMNI_WHEEL_RADIUS)) * 60.0f;
     
-    // Map RPM sang PWM (0-333 RPM -> 60-255 PWM để bù L298N voltage drop)
-    // Sử dụng range 60-255 thay vì 0-255
-    float pwm_range = OMNI_MAX_SPEED - OMNI_MIN_SPEED;  // 255 - 60 = 195
+    // Map RPM sang PWM (0-25 RPM -> 30-255 PWM để bù L298N voltage drop)
+    // Sử dụng range 30-255 để giữ control mịn cho low-speed
+    float pwm_range = OMNI_MAX_SPEED - OMNI_MIN_SPEED;  // 255 - 30 = 225
     float pwm_float = (abs(rpm) / OMNI_MAX_WHEEL_RPM) * pwm_range + OMNI_MIN_SPEED;
     
     int pwm = (int)pwm_float;
@@ -250,9 +273,10 @@ void omniStop() {
     omni_state.target_vy = 0;
     omni_state.target_omega = 0;
     
-    setMotorSpeed(motor1, 0, true);
-    setMotorSpeed(motor2, 0, true);
-    setMotorSpeed(motor3, 0, true);
+    // ✅ Chạy trực tiếp bằng PWM (không dùng PID)
+    setMotorSpeed(motor1, 0, MOTOR_STOP);
+    setMotorSpeed(motor2, 0, MOTOR_STOP);
+    setMotorSpeed(motor3, 0, MOTOR_STOP);
 }
 
 void omniBrake() {

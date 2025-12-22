@@ -295,7 +295,7 @@ void sendRobotPosition(float x, float y, float heading, float vx, float vy, floa
     sendUDPPacket(posMessage, UDP_PRIORITY_NORMAL);
     
     // ✅ Debug log (ALWAYS ON để kiểm tra)
-    Serial.printf("[UDP_POS] Sent: %s\n", posMessage);
+    // Serial.printf("[UDP_POS] Sent: %s\n", posMessage);
 }
 
 // ===== UDP TOUCH UTILITY FUNCTIONS =====
@@ -589,19 +589,83 @@ void handleUDPReceive() {
                 }
             }
             
-            // ✅ Xử lý lệnh MOVE (OMNI ROBOT CONTROL)
+            // ✅ Xử lý lệnh ROBOT CONTROL (Hỗ trợ tốc độ)
+            // Format: ROBOT:FORWARD,150 hoặc ROBOT:FORWARD (mặc định 150)
+            else if (data.startsWith("ROBOT:")) {
+                int colonPos = data.indexOf(':');
+                String params = data.substring(colonPos + 1);
+                params.trim();
+                
+                // Phân tách direction và speed
+                int commaPos = params.indexOf(',');
+                String direction = (commaPos > 0) ? params.substring(0, commaPos) : params;
+                String speedStr = (commaPos > 0) ? params.substring(commaPos + 1) : "150";
+                
+                direction.trim();
+                speedStr.trim();
+                
+                // Chuyển đổi speed (0-255) sang cm/s (0-30)
+                int speedValue = speedStr.toInt();
+                if (speedValue < 0) speedValue = 0;
+                if (speedValue > 255) speedValue = 255;
+                float speed = (speedValue / 255.0f) * 30.0f;  // Chuyển đổi PWM (0-255) -> cm/s (0-30)
+                
+                Serial.printf("[UDP_ROBOT] Received: direction=%s, speed_pwm=%d, speed_cms=%.1f\n", 
+                             direction.c_str(), speedValue, speed);
+                
+                // Enable omni robot
+                setOmniEnabled(true);
+                
+                if (direction == "FORWARD") {
+                    omniForward(speed);
+                    Serial.printf("[UDP_ROBOT] ⬆️ Moving FORWARD at %.1f cm/s (PWM:%d)\n", speed, speedValue);
+                } 
+                else if (direction == "BACKWARD") {
+                    omniForward(-speed);
+                    Serial.printf("[UDP_ROBOT] ⬇️ Moving BACKWARD at %.1f cm/s (PWM:%d)\n", speed, speedValue);
+                } 
+                else if (direction == "LEFT") {
+                    omniStrafe(-speed);
+                    Serial.printf("[UDP_ROBOT] ⬅️ Moving LEFT at %.1f cm/s (PWM:%d)\n", speed, speedValue);
+                } 
+                else if (direction == "RIGHT") {
+                    omniStrafe(speed);
+                    Serial.printf("[UDP_ROBOT] ➡️ Moving RIGHT at %.1f cm/s (PWM:%d)\n", speed, speedValue);
+                } 
+                else if (direction == "ROTATE_LEFT") {
+                    // Quay trái: vận tốc góc 60 deg/s
+                    float angular_speed = (speedValue / 255.0f) * 180.0f;  // Tối đa 180 deg/s
+                    omniRotate(-angular_speed);  // Âm = quay trái (CCW)
+                    Serial.printf("[UDP_ROBOT] ↶ Rotating LEFT at %.1f deg/s (PWM:%d)\n", angular_speed, speedValue);
+                }
+                else if (direction == "ROTATE_RIGHT") {
+                    // Quay phải: vận tốc góc 60 deg/s
+                    float angular_speed = (speedValue / 255.0f) * 180.0f;  // Tối đa 180 deg/s
+                    omniRotate(angular_speed);  // Dương = quay phải (CW)
+                    Serial.printf("[UDP_ROBOT] ↷ Rotating RIGHT at %.1f deg/s (PWM:%d)\n", angular_speed, speedValue);
+                }
+                else if (direction == "STOP") {
+                    omniStop();
+                    Serial.println("[UDP_ROBOT] 🛑 STOP");
+                } 
+                else {
+                    Serial.printf("[UDP_ROBOT] ❌ Unknown direction: %s\n", direction.c_str());
+                }
+            }
+            
+            // ✅ Xử lý lệnh MOVE cũ (backward compatibility)
             else if (data.startsWith("MOVE:")) {
                 int colonPos = data.indexOf(':');
                 String direction = data.substring(colonPos + 1);
                 direction.trim();
                 
-                Serial.printf("[UDP_MOVE] Received direction: %s\n", direction.c_str());
+                Serial.printf("[UDP_MOVE] Received direction: %s (using default speed 15 cm/s)\n", direction.c_str());
                 
                 // Enable omni robot
                 setOmniEnabled(true);
                 
-                // Default speed - Tăng tốc để motor chạy đủ mạnh
-                float speed = 50.0f; // 50 cm/s
+                // ✅ Tốc độ mặc định 15 cm/s
+                float speed = 15.0f;
                 
                 if (direction == "FORWARD") {
                     omniForward(speed);
@@ -749,6 +813,6 @@ void processRecalibration() {
 void sendSpeed(int16_t s1, int16_t s2, int16_t s3) {
     char speedMessage[64];
     snprintf(speedMessage, sizeof(speedMessage), "SPEED:%d,%d,%d", s1, s2, s3);
-    Serial.printf("[UDP_SPEED] Sending: %s\n", speedMessage);  // DEBUG
+    // Serial.printf("[UDP_SPEED] Sending: %s\n", speedMessage);  // DEBUG
     sendUDPPacket(speedMessage, UDP_PRIORITY_NORMAL);  // ✅ Ưu tiên NORMAL (giống COMPASS)
 }
