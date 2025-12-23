@@ -452,10 +452,11 @@ void setMotorSpeedWithPID(Motor& motor, int speed, int direction) {
         float feedforward_boost = FEEDFORWARD_BASE_BOOST;
         
         // Nếu đã có integral term từ lần chạy trước, dùng để ước tính load
-        if (fabs(motor.error_sum) > 1.0 && fabs(motor.target_speed) > MIN_TARGET_SPEED_FOR_COMPENSATION) {
+        // Use target_rpm (not target_speed PWM) for proper scaling
+        if (fabs(motor.error_sum) > 1.0 && fabs(motor.target_rpm) > MIN_TARGET_SPEED_FOR_COMPENSATION) {
             // Integral term cho biết có bao nhiêu error tích lũy (do load)
-            // Thêm compensation dựa trên integral
-            float load_compensation = motor.ki * motor.error_sum / fabs(motor.target_speed);
+            // Thêm compensation dựa trên integral (normalized by target RPM)
+            float load_compensation = motor.ki * motor.error_sum / fabs(motor.target_rpm);
             load_compensation = constrain(load_compensation, 0.0, MAX_LOAD_COMPENSATION);
             feedforward_boost += load_compensation;
         }
