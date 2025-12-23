@@ -1,6 +1,37 @@
 #include "motor.h"
 
 // ============================================
+// PID TUNING CONSTANTS
+// ============================================
+// 🆕 Exponential Moving Average (EMA) filter parameters
+const float EMA_ALPHA = 0.3f;              // Weight for new value (0.0-1.0)
+const float EMA_BETA = 0.7f;               // Weight for old filtered value (1.0 - EMA_ALPHA)
+
+// 🆕 Feed-forward control parameters
+const float FEEDFORWARD_BASE_BOOST = 1.15f;     // Base boost multiplier (15%)
+const float MAX_LOAD_COMPENSATION = 0.3f;       // Maximum load compensation (30%)
+const float MIN_TARGET_SPEED_FOR_COMPENSATION = 0.1f; // Minimum target speed to apply compensation
+
+// 🆕 Adaptive update rate thresholds (error percentage)
+const float ERROR_THRESHOLD_HIGH = 20.0f;       // Error > 20%: fast update (50ms)
+const float ERROR_THRESHOLD_MEDIUM = 10.0f;     // Error 10-20%: medium update (100ms)
+const unsigned long UPDATE_INTERVAL_FAST = 50;     // ms
+const unsigned long UPDATE_INTERVAL_MEDIUM = 100;  // ms
+const unsigned long UPDATE_INTERVAL_SLOW = 200;    // ms
+
+// 🆕 Integral reset (anti-overshoot) parameters
+const float INTEGRAL_RESET_FACTOR = 0.5f;       // Reduce integral to 50% on setpoint crossing
+
+// 🆕 Adaptive PID gains parameters
+const float LOAD_THRESHOLD_HEAVY = 1.2f;        // Load factor > 1.2 = heavy load
+const float LOAD_THRESHOLD_LIGHT = 0.9f;        // Load factor < 0.9 = light load
+const float HEAVY_LOAD_KP_MULTIPLIER = 1.3f;    // Kp multiplier for heavy load (+30%)
+const float HEAVY_LOAD_KI_MULTIPLIER = 1.2f;    // Ki multiplier for heavy load (+20%)
+const float LIGHT_LOAD_KP_MULTIPLIER = 0.9f;    // Kp multiplier for light load (-10%)
+const float LIGHT_LOAD_KI_MULTIPLIER = 0.95f;   // Ki multiplier for light load (-5%)
+const float MIN_PWM_FOR_LOAD_CALC = 30.0f;      // Minimum PWM for load calculation
+
+// ============================================
 // GLOBAL MOTOR INSTANCES
 // ============================================
 Motor motor1 = {
@@ -310,6 +341,8 @@ float getMotorRPM(Motor& motor) {
     static float last_rpm[3] = {0.0, 0.0, 0.0};
     static unsigned long last_time[3] = {0, 0, 0};
     static long last_count[3] = {0, 0, 0};
+    // 🆕 Exponential Moving Average filter (alpha = 0.3)
+    static float filtered_rpm[3] = {0.0, 0.0, 0.0};
     
     int motor_id = motor.id - 1; // 0, 1, 2
     unsigned long current_time = millis();
@@ -317,9 +350,9 @@ float getMotorRPM(Motor& motor) {
     
     unsigned long time_diff = current_time - last_time[motor_id];
     
-    // ✅ Nếu chưa đủ 100ms, trả về RPM cuối cùng thay vì 0
+    // ✅ Nếu chưa đủ 100ms, trả về RPM đã lọc thay vì 0
     if (time_diff < 100) {
-        return last_rpm[motor_id];
+        return filtered_rpm[motor_id];
     }
     
     long count_diff = current_count - last_count[motor_id];
@@ -328,19 +361,29 @@ float getMotorRPM(Motor& motor) {
     // ✅ Chia cho tỷ số truyền để ra RPM bánh xe
     float rpm_wheel = rpm_encoder / MOTOR_GEAR_RATIO;
     
+    // 🆕 Apply Exponential Moving Average filter
+    // filtered = alpha * new_value + (1 - alpha) * filtered_old
+    // alpha = 0.3 provides good balance between noise reduction and responsiveness
+    if (filtered_rpm[motor_id] == 0.0) {
+        // Khởi tạo lần đầu
+        filtered_rpm[motor_id] = rpm_wheel;
+    } else {
+        filtered_rpm[motor_id] = EMA_ALPHA * rpm_wheel + EMA_BETA * filtered_rpm[motor_id];
+    }
+    
     // ✅ DEBUG: In encoder info
     static unsigned long last_encoder_debug[3] = {0, 0, 0};
     if (millis() - last_encoder_debug[motor_id] > 1000) {
         last_encoder_debug[motor_id] = millis();
-        Serial.printf("[ENCODER_%d] Count:%ld Diff:%ld Time:%lums PWM:%d RPM:%.1f\n", 
-                      motor.id, current_count, count_diff, time_diff, motor.current_speed, rpm_wheel);
+        Serial.printf("[ENCODER_%d] Count:%ld Diff:%ld Time:%lums PWM:%d RPM:%.1f (filtered:%.1f)\n", 
+                      motor.id, current_count, count_diff, time_diff, motor.current_speed, rpm_wheel, filtered_rpm[motor_id]);
     }
     
     last_time[motor_id] = current_time;
     last_count[motor_id] = current_count;
-    last_rpm[motor_id] = rpm_wheel;
+    last_rpm[motor_id] = filtered_rpm[motor_id];
     
-    return rpm_wheel;  // ✅ Trả về RPM bánh xe
+    return filtered_rpm[motor_id];  // ✅ Trả về RPM đã lọc
 }
 
 // ============================================
@@ -394,10 +437,31 @@ void setMotorSpeedWithPID(Motor& motor, int speed, int direction) {
         motor.target_rpm = 0.0;
     }
     
-    // Đặt tốc độ ban đầu với PWM cao hơn 20% để khởi động nhanh
+    // 🆕 Feed-forward control: Ước tính PWM cần thiết dựa trên motor characteristics
+    // Motor characteristics: 
+    // - PWM 0-30: Dead zone (không chạy do voltage drop của L298N)
+    // - PWM 30-255: Linear relationship với RPM
+    // - Load variations: Cần thêm 10-20% PWM khi có tải
     int initial_pwm = motor.target_speed;
     if (motor.pid_enabled && initial_pwm > 0) {
-        initial_pwm = min(255, (int)(initial_pwm * 1.2));  // Boost 20% lúc start
+        // Feed-forward estimation:
+        // 1. Base PWM từ target speed
+        // 2. Compensation cho dead zone
+        // 3. Boost 15% để khởi động nhanh (giảm response time)
+        // 4. Load compensation từ lần chạy trước (dựa vào integral term)
+        float feedforward_boost = FEEDFORWARD_BASE_BOOST;
+        
+        // Nếu đã có integral term từ lần chạy trước, dùng để ước tính load
+        // Use target_rpm (not target_speed PWM) for proper scaling
+        if (fabs(motor.error_sum) > 1.0 && fabs(motor.target_rpm) > MIN_TARGET_SPEED_FOR_COMPENSATION) {
+            // Integral term cho biết có bao nhiêu error tích lũy (do load)
+            // Thêm compensation dựa trên integral (normalized by target RPM)
+            float load_compensation = motor.ki * motor.error_sum / fabs(motor.target_rpm);
+            load_compensation = constrain(load_compensation, 0.0, MAX_LOAD_COMPENSATION);
+            feedforward_boost += load_compensation;
+        }
+        
+        initial_pwm = min(255, (int)(initial_pwm * feedforward_boost));
     }
     setMotorSpeed(motor, initial_pwm, direction);
     
@@ -415,9 +479,21 @@ void updateMotorPID(Motor& motor) {
         return;
     }
     
-    // Kiểm tra thời gian cập nhật (mỗi 200ms - rất chậm để tránh dao động)
     unsigned long current_time = millis();
-    if (current_time - motor.last_pid_update < 200) {
+    
+    // 🆕 Adaptive Update Rate based on Error
+    // Tự động điều chỉnh tần số update dựa trên mức độ error
+    // Static variables để lưu update interval cho mỗi motor
+    static unsigned long update_interval[3] = {UPDATE_INTERVAL_SLOW, UPDATE_INTERVAL_SLOW, UPDATE_INTERVAL_SLOW};
+    
+    // Bounds check for motor_idx BEFORE using it
+    int motor_idx = motor.id - 1;
+    if (motor_idx < 0 || motor_idx >= 3) {
+        return;  // Invalid motor ID
+    }
+    
+    // Kiểm tra thời gian cập nhật với interval động
+    if (current_time - motor.last_pid_update < update_interval[motor_idx]) {
         return;
     }
     
@@ -428,7 +504,7 @@ void updateMotorPID(Motor& motor) {
     motor.current_rpm = getMotorRPM(motor);
     
     // Nếu target = 0, dừng motor
-    if (abs(motor.target_rpm) < 0.1) {
+    if (fabs(motor.target_rpm) < 0.1) {
         stopMotor(motor);
         resetMotorPID(motor);
         return;
@@ -437,7 +513,6 @@ void updateMotorPID(Motor& motor) {
     // ⚠️ Kiểm tra encoder có hoạt động không
     static long last_encoder_check[3] = {0, 0, 0};
     static unsigned long encoder_stuck_time[3] = {0, 0, 0};
-    int motor_idx = motor.id - 1;
     
     if (motor.current_speed > PWM_MIN_THRESHOLD) {
         if (motor.encoder_count == last_encoder_check[motor_idx]) {
@@ -457,6 +532,33 @@ void updateMotorPID(Motor& motor) {
     // Tính error
     float error = motor.target_rpm - motor.current_rpm;
     
+    // 🆕 Adaptive Update Rate: Điều chỉnh interval cho lần update tiếp theo
+    // Error percentage = |error| / |target_rpm| * 100
+    float error_percent = fabs(error) / max(fabs(motor.target_rpm), 1.0f) * 100.0;
+    
+    if (error_percent > ERROR_THRESHOLD_HIGH) {
+        // Error lớn (>20%): Update nhanh (50ms) để phản ứng nhanh
+        update_interval[motor_idx] = UPDATE_INTERVAL_FAST;
+    } else if (error_percent > ERROR_THRESHOLD_MEDIUM) {
+        // Error trung bình (10-20%): Update vừa (100ms)
+        update_interval[motor_idx] = UPDATE_INTERVAL_MEDIUM;
+    } else {
+        // Error nhỏ (<10%): Update chậm (200ms) để ổn định
+        update_interval[motor_idx] = UPDATE_INTERVAL_SLOW;
+    }
+    
+    // 🆕 Improved Integral Reset (Anti-overshoot)
+    // Khi error đổi dấu (cross setpoint), giảm integral xuống 50%
+    static float last_error_sign[3] = {0, 0, 0};
+    float current_error_sign = (error >= 0) ? 1.0 : -1.0;
+    
+    if (last_error_sign[motor_idx] != 0 && current_error_sign != last_error_sign[motor_idx]) {
+        // Error đổi dấu - đã vượt qua setpoint
+        motor.error_sum *= INTEGRAL_RESET_FACTOR;
+        // Serial.printf("[PID_%d] Setpoint crossed, integral reduced: %.2f\n", motor.id, motor.error_sum);
+    }
+    last_error_sign[motor_idx] = current_error_sign;
+    
     // PID calculation
     motor.error_sum += error * dt;
     
@@ -470,9 +572,41 @@ void updateMotorPID(Motor& motor) {
     static float filtered_derivative[3] = {0, 0, 0};
     filtered_derivative[motor_idx] = 0.7 * filtered_derivative[motor_idx] + 0.3 * error_derivative;
     
-    // PID output với derivative đã filter
-    float pid_output = motor.kp * error + 
-                      motor.ki * motor.error_sum + 
+    // 🆕 Adaptive PID Gains based on Load
+    // Detect load qua PWM cần thiết để duy trì tốc độ
+    // PWM cao hơn target_speed = có tải nặng
+    static float adaptive_kp[3] = {0, 0, 0};
+    static float adaptive_ki[3] = {0, 0, 0};
+    
+    // Khởi tạo lần đầu
+    if (adaptive_kp[motor_idx] == 0) {
+        adaptive_kp[motor_idx] = motor.kp;
+        adaptive_ki[motor_idx] = motor.ki;
+    }
+    
+    // Tính load factor dựa trên PWM hiện tại so với target
+    // load_factor > 1.0 = có tải
+    // Use fabs to handle negative target speeds correctly
+    float load_factor = (float)motor.current_speed / max(fabs(motor.target_speed), MIN_PWM_FOR_LOAD_CALC);
+    
+    // Điều chỉnh gains dựa trên load
+    if (load_factor > LOAD_THRESHOLD_HEAVY) {
+        // Tải nặng: Tăng Kp và Ki để phản ứng mạnh hơn
+        adaptive_kp[motor_idx] = motor.kp * HEAVY_LOAD_KP_MULTIPLIER;
+        adaptive_ki[motor_idx] = motor.ki * HEAVY_LOAD_KI_MULTIPLIER;
+    } else if (load_factor < LOAD_THRESHOLD_LIGHT) {
+        // Không tải hoặc tải nhẹ: Giảm gains để tránh dao động
+        adaptive_kp[motor_idx] = motor.kp * LIGHT_LOAD_KP_MULTIPLIER;
+        adaptive_ki[motor_idx] = motor.ki * LIGHT_LOAD_KI_MULTIPLIER;
+    } else {
+        // Tải bình thường: Về gains gốc
+        adaptive_kp[motor_idx] = motor.kp;
+        adaptive_ki[motor_idx] = motor.ki;
+    }
+    
+    // PID output với adaptive gains
+    float pid_output = adaptive_kp[motor_idx] * error + 
+                      adaptive_ki[motor_idx] * motor.error_sum + 
                       motor.kd * filtered_derivative[motor_idx];
     
     // ✅ Tính PWM mới: BẮT ĐẦU từ target_speed (không phải current_speed)
@@ -498,10 +632,12 @@ void updateMotorPID(Motor& motor) {
     // Debug output mỗi 500ms
     static unsigned long last_debug[3] = {0, 0, 0};
     if (current_time - last_debug[motor_idx] > 500) {
-        Serial.printf("[PID_%d] T:%.1f C:%.1f Err:%.1f I:%.2f D:%.2f PWM:%d->%d Enc:%ld\n", 
+        Serial.printf("[PID_%d] T:%.1f C:%.1f Err:%.1f(%.0f%%) I:%.2f D:%.2f PWM:%d->%d Load:%.2f Kp:%.2f Ki:%.2f Int:%lums Enc:%ld\n", 
                       motor.id, motor.target_rpm, motor.current_rpm, 
-                      error, motor.error_sum, filtered_derivative[motor_idx], 
-                      motor.current_speed, new_speed, motor.encoder_count);
+                      error, error_percent, motor.error_sum, filtered_derivative[motor_idx], 
+                      motor.current_speed, new_speed, load_factor, 
+                      adaptive_kp[motor_idx], adaptive_ki[motor_idx],
+                      update_interval[motor_idx], motor.encoder_count);
         last_debug[motor_idx] = current_time;
     }
 }
@@ -531,12 +667,15 @@ void printAllMotorStatus() {
 // ============================================
 void motorControlTask(void* parameter) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(200); // 200ms - rất chậm để tránh dao động
+    // 🆕 Giảm xuống 50ms để hỗ trợ adaptive update rate
+    // Task sẽ chạy mỗi 50ms, nhưng updateMotorPID() tự quyết định có update hay không
+    const TickType_t xFrequency = pdMS_TO_TICKS(50); // 50ms base frequency
     
-    Serial.println("[MOTOR TASK] PID control task started!");
+    Serial.println("[MOTOR TASK] PID control task started with adaptive update rate!");
     
     while (true) {
         // Cập nhật PID cho tất cả motors
+        // Mỗi motor tự quyết định có update dựa trên adaptive interval
         updateMotorPID(motor1);
         updateMotorPID(motor2);
         updateMotorPID(motor3);
