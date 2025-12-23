@@ -421,7 +421,7 @@ void setMotorSpeedWithPID(Motor& motor, int speed, int direction) {
         float feedforward_boost = 1.15;  // 15% boost for faster start
         
         // Nếu đã có integral term từ lần chạy trước, dùng để ước tính load
-        if (abs(motor.error_sum) > 1.0) {
+        if (fabs(motor.error_sum) > 1.0 && motor.target_speed > 0) {
             // Integral term cho biết có bao nhiêu error tích lũy (do load)
             // Thêm compensation dựa trên integral
             float load_compensation = motor.ki * motor.error_sum / motor.target_speed;
@@ -455,6 +455,11 @@ void updateMotorPID(Motor& motor) {
     static unsigned long update_interval[3] = {200, 200, 200};  // ms, khởi tạo 200ms
     int motor_idx = motor.id - 1;
     
+    // Bounds check for motor_idx
+    if (motor_idx < 0 || motor_idx >= 3) {
+        return;  // Invalid motor ID
+    }
+    
     // Kiểm tra thời gian cập nhật với interval động
     if (current_time - motor.last_pid_update < update_interval[motor_idx]) {
         return;
@@ -467,7 +472,7 @@ void updateMotorPID(Motor& motor) {
     motor.current_rpm = getMotorRPM(motor);
     
     // Nếu target = 0, dừng motor
-    if (abs(motor.target_rpm) < 0.1) {
+    if (fabs(motor.target_rpm) < 0.1) {
         stopMotor(motor);
         resetMotorPID(motor);
         return;
@@ -497,7 +502,7 @@ void updateMotorPID(Motor& motor) {
     
     // 🆕 Adaptive Update Rate: Điều chỉnh interval cho lần update tiếp theo
     // Error percentage = |error| / |target_rpm| * 100
-    float error_percent = abs(error) / max(abs(motor.target_rpm), 1.0f) * 100.0;
+    float error_percent = fabs(error) / max(fabs(motor.target_rpm), 1.0f) * 100.0;
     
     if (error_percent > 20.0) {
         // Error lớn (>20%): Update nhanh (50ms) để phản ứng nhanh
