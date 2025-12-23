@@ -36,7 +36,7 @@ Error Percentage = |error| / |target_rpm| × 100%
 #### Code implementation
 ```cpp
 // Tính error percentage
-float error_percent = abs(error) / max(abs(motor.target_rpm), 1.0f) * 100.0;
+float error_percent = fabs(error) / max(fabs(motor.target_rpm), 1.0f) * 100.0;
 
 if (error_percent > 20.0) {
     update_interval[motor_idx] = 50;   // Fast
@@ -137,7 +137,7 @@ Where:
 float feedforward_boost = 1.15;  // 15% base boost
 
 // Load compensation từ integral term
-if (abs(motor.error_sum) > 1.0) {
+if (fabs(motor.error_sum) > 1.0 && motor.target_speed > 0) {
     float load_compensation = motor.ki * motor.error_sum / motor.target_speed;
     load_compensation = constrain(load_compensation, 0.0, 0.3);
     feedforward_boost += load_compensation;
@@ -731,7 +731,7 @@ void checkPIDPerformance() {
     delay(3000);
     
     float actual_rpm = motor1.current_rpm;
-    float error_percent = abs(actual_rpm - target_rpm) / target_rpm * 100.0;
+    float error_percent = fabs(actual_rpm - target_rpm) / target_rpm * 100.0;
     unsigned long response_time = millis() - start_time;
     
     Serial.printf("Target: %.1f RPM\n", target_rpm);
@@ -753,7 +753,7 @@ void dynamicTuning() {
     delay(5000);
     
     // Check performance
-    float error = abs(motor1.target_rpm - motor1.current_rpm);
+    float error = fabs(motor1.target_rpm - motor1.current_rpm);
     
     if (error > 5.0) {
         // Increase aggressiveness
