@@ -452,10 +452,10 @@ void setMotorSpeedWithPID(Motor& motor, int speed, int direction) {
         float feedforward_boost = FEEDFORWARD_BASE_BOOST;
         
         // Nếu đã có integral term từ lần chạy trước, dùng để ước tính load
-        if (fabs(motor.error_sum) > 1.0 && motor.target_speed > MIN_TARGET_SPEED_FOR_COMPENSATION) {
+        if (fabs(motor.error_sum) > 1.0 && fabs(motor.target_speed) > MIN_TARGET_SPEED_FOR_COMPENSATION) {
             // Integral term cho biết có bao nhiêu error tích lũy (do load)
             // Thêm compensation dựa trên integral
-            float load_compensation = motor.ki * motor.error_sum / motor.target_speed;
+            float load_compensation = motor.ki * motor.error_sum / fabs(motor.target_speed);
             load_compensation = constrain(load_compensation, 0.0, MAX_LOAD_COMPENSATION);
             feedforward_boost += load_compensation;
         }
@@ -484,9 +484,9 @@ void updateMotorPID(Motor& motor) {
     // Tự động điều chỉnh tần số update dựa trên mức độ error
     // Static variables để lưu update interval cho mỗi motor
     static unsigned long update_interval[3] = {UPDATE_INTERVAL_SLOW, UPDATE_INTERVAL_SLOW, UPDATE_INTERVAL_SLOW};
-    int motor_idx = motor.id - 1;
     
-    // Bounds check for motor_idx
+    // Bounds check for motor_idx BEFORE using it
+    int motor_idx = motor.id - 1;
     if (motor_idx < 0 || motor_idx >= 3) {
         return;  // Invalid motor ID
     }
@@ -585,7 +585,8 @@ void updateMotorPID(Motor& motor) {
     
     // Tính load factor dựa trên PWM hiện tại so với target
     // load_factor > 1.0 = có tải
-    float load_factor = (float)motor.current_speed / max((float)motor.target_speed, MIN_PWM_FOR_LOAD_CALC);
+    // Use fabs to handle negative target speeds correctly
+    float load_factor = (float)motor.current_speed / max(fabs(motor.target_speed), MIN_PWM_FOR_LOAD_CALC);
     
     // Điều chỉnh gains dựa trên load
     if (load_factor > LOAD_THRESHOLD_HEAVY) {
