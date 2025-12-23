@@ -1,6 +1,37 @@
 #include "motor.h"
 
 // ============================================
+// PID TUNING CONSTANTS
+// ============================================
+// 🆕 Exponential Moving Average (EMA) filter parameters
+const float EMA_ALPHA = 0.3f;              // Weight for new value (0.0-1.0)
+const float EMA_BETA = 0.7f;               // Weight for old filtered value (1.0 - EMA_ALPHA)
+
+// 🆕 Feed-forward control parameters
+const float FEEDFORWARD_BASE_BOOST = 1.15f;     // Base boost multiplier (15%)
+const float MAX_LOAD_COMPENSATION = 0.3f;       // Maximum load compensation (30%)
+const float MIN_TARGET_SPEED_FOR_COMPENSATION = 0.1f; // Minimum target speed to apply compensation
+
+// 🆕 Adaptive update rate thresholds (error percentage)
+const float ERROR_THRESHOLD_HIGH = 20.0f;       // Error > 20%: fast update (50ms)
+const float ERROR_THRESHOLD_MEDIUM = 10.0f;     // Error 10-20%: medium update (100ms)
+const unsigned long UPDATE_INTERVAL_FAST = 50;     // ms
+const unsigned long UPDATE_INTERVAL_MEDIUM = 100;  // ms
+const unsigned long UPDATE_INTERVAL_SLOW = 200;    // ms
+
+// 🆕 Integral reset (anti-overshoot) parameters
+const float INTEGRAL_RESET_FACTOR = 0.5f;       // Reduce integral to 50% on setpoint crossing
+
+// 🆕 Adaptive PID gains parameters
+const float LOAD_THRESHOLD_HEAVY = 1.2f;        // Load factor > 1.2 = heavy load
+const float LOAD_THRESHOLD_LIGHT = 0.9f;        // Load factor < 0.9 = light load
+const float HEAVY_LOAD_KP_MULTIPLIER = 1.3f;    // Kp multiplier for heavy load (+30%)
+const float HEAVY_LOAD_KI_MULTIPLIER = 1.2f;    // Ki multiplier for heavy load (+20%)
+const float LIGHT_LOAD_KP_MULTIPLIER = 0.9f;    // Kp multiplier for light load (-10%)
+const float LIGHT_LOAD_KI_MULTIPLIER = 0.95f;   // Ki multiplier for light load (-5%)
+const float MIN_PWM_FOR_LOAD_CALC = 30.0f;      // Minimum PWM for load calculation
+
+// ============================================
 // GLOBAL MOTOR INSTANCES
 // ============================================
 Motor motor1 = {
@@ -337,7 +368,7 @@ float getMotorRPM(Motor& motor) {
         // Khởi tạo lần đầu
         filtered_rpm[motor_id] = rpm_wheel;
     } else {
-        filtered_rpm[motor_id] = 0.3 * rpm_wheel + 0.7 * filtered_rpm[motor_id];
+        filtered_rpm[motor_id] = EMA_ALPHA * rpm_wheel + EMA_BETA * filtered_rpm[motor_id];
     }
     
     // ✅ DEBUG: In encoder info
@@ -418,14 +449,14 @@ void setMotorSpeedWithPID(Motor& motor, int speed, int direction) {
         // 2. Compensation cho dead zone
         // 3. Boost 15% để khởi động nhanh (giảm response time)
         // 4. Load compensation từ lần chạy trước (dựa vào integral term)
-        float feedforward_boost = 1.15;  // 15% boost for faster start
+        float feedforward_boost = FEEDFORWARD_BASE_BOOST;
         
         // Nếu đã có integral term từ lần chạy trước, dùng để ước tính load
-        if (fabs(motor.error_sum) > 1.0 && motor.target_speed > 0) {
+        if (fabs(motor.error_sum) > 1.0 && motor.target_speed > MIN_TARGET_SPEED_FOR_COMPENSATION) {
             // Integral term cho biết có bao nhiêu error tích lũy (do load)
             // Thêm compensation dựa trên integral
             float load_compensation = motor.ki * motor.error_sum / motor.target_speed;
-            load_compensation = constrain(load_compensation, 0.0, 0.3);  // Max 30% thêm
+            load_compensation = constrain(load_compensation, 0.0, MAX_LOAD_COMPENSATION);
             feedforward_boost += load_compensation;
         }
         
@@ -452,7 +483,7 @@ void updateMotorPID(Motor& motor) {
     // 🆕 Adaptive Update Rate based on Error
     // Tự động điều chỉnh tần số update dựa trên mức độ error
     // Static variables để lưu update interval cho mỗi motor
-    static unsigned long update_interval[3] = {200, 200, 200};  // ms, khởi tạo 200ms
+    static unsigned long update_interval[3] = {UPDATE_INTERVAL_SLOW, UPDATE_INTERVAL_SLOW, UPDATE_INTERVAL_SLOW};
     int motor_idx = motor.id - 1;
     
     // Bounds check for motor_idx
@@ -504,15 +535,15 @@ void updateMotorPID(Motor& motor) {
     // Error percentage = |error| / |target_rpm| * 100
     float error_percent = fabs(error) / max(fabs(motor.target_rpm), 1.0f) * 100.0;
     
-    if (error_percent > 20.0) {
+    if (error_percent > ERROR_THRESHOLD_HIGH) {
         // Error lớn (>20%): Update nhanh (50ms) để phản ứng nhanh
-        update_interval[motor_idx] = 50;
-    } else if (error_percent > 10.0) {
+        update_interval[motor_idx] = UPDATE_INTERVAL_FAST;
+    } else if (error_percent > ERROR_THRESHOLD_MEDIUM) {
         // Error trung bình (10-20%): Update vừa (100ms)
-        update_interval[motor_idx] = 100;
+        update_interval[motor_idx] = UPDATE_INTERVAL_MEDIUM;
     } else {
         // Error nhỏ (<10%): Update chậm (200ms) để ổn định
-        update_interval[motor_idx] = 200;
+        update_interval[motor_idx] = UPDATE_INTERVAL_SLOW;
     }
     
     // 🆕 Improved Integral Reset (Anti-overshoot)
@@ -522,7 +553,7 @@ void updateMotorPID(Motor& motor) {
     
     if (last_error_sign[motor_idx] != 0 && current_error_sign != last_error_sign[motor_idx]) {
         // Error đổi dấu - đã vượt qua setpoint
-        motor.error_sum *= 0.5;  // Giảm integral xuống 50%
+        motor.error_sum *= INTEGRAL_RESET_FACTOR;
         // Serial.printf("[PID_%d] Setpoint crossed, integral reduced: %.2f\n", motor.id, motor.error_sum);
     }
     last_error_sign[motor_idx] = current_error_sign;
@@ -554,17 +585,17 @@ void updateMotorPID(Motor& motor) {
     
     // Tính load factor dựa trên PWM hiện tại so với target
     // load_factor > 1.0 = có tải
-    float load_factor = (float)motor.current_speed / max((float)motor.target_speed, 30.0f);
+    float load_factor = (float)motor.current_speed / max((float)motor.target_speed, MIN_PWM_FOR_LOAD_CALC);
     
     // Điều chỉnh gains dựa trên load
-    if (load_factor > 1.2) {
+    if (load_factor > LOAD_THRESHOLD_HEAVY) {
         // Tải nặng: Tăng Kp và Ki để phản ứng mạnh hơn
-        adaptive_kp[motor_idx] = motor.kp * 1.3;  // Tăng 30%
-        adaptive_ki[motor_idx] = motor.ki * 1.2;  // Tăng 20%
-    } else if (load_factor < 0.9) {
+        adaptive_kp[motor_idx] = motor.kp * HEAVY_LOAD_KP_MULTIPLIER;
+        adaptive_ki[motor_idx] = motor.ki * HEAVY_LOAD_KI_MULTIPLIER;
+    } else if (load_factor < LOAD_THRESHOLD_LIGHT) {
         // Không tải hoặc tải nhẹ: Giảm gains để tránh dao động
-        adaptive_kp[motor_idx] = motor.kp * 0.9;  // Giảm 10%
-        adaptive_ki[motor_idx] = motor.ki * 0.95; // Giảm 5%
+        adaptive_kp[motor_idx] = motor.kp * LIGHT_LOAD_KP_MULTIPLIER;
+        adaptive_ki[motor_idx] = motor.ki * LIGHT_LOAD_KI_MULTIPLIER;
     } else {
         // Tải bình thường: Về gains gốc
         adaptive_kp[motor_idx] = motor.kp;
