@@ -1,7 +1,8 @@
 #include "main.h"
 #include "IR.h"
 #include "a4l.h"
-#include "omni.h"  // ✅ Add omni robot control
+#include "3_motor.h"  // ✅ Omni robot control with PID
+#include "qmc5883l.h"  // ✅ MPU9250 compass
 #include <stdio.h>
 
 // ===== UDP SEND CONTROL =====
@@ -12,6 +13,11 @@ const unsigned long UDP_THROTTLE_MS = 2;  // Khoảng cách tối thiểu giữa
 // ===== RECALIBRATION STATE =====
 static unsigned long recalibStartTime = 0;
 static int recalibStep = 0;  // 0: idle, 1: sent D, 2: sent A, 3: waiting 10s, 4: done
+
+// ===== ROTATE TO DIRECTION STATE =====
+RotateDirection currentRotateTarget = ROTATE_NONE;
+static unsigned long rotateStartTime = 0;
+static const unsigned long MAX_ROTATE_TIME = 10000;  // 10s timeout
 
 // Hàng đợi ưu tiên cho các message
 struct UDPMessage {
@@ -57,28 +63,28 @@ void calculatePortsFromLocalIP() {
     TOUCH_SERVER_PORT = lastOctet * 100;
     LOCAL_TOUCH_PORT = lastOctet * 100;
     
-    Serial.printf("[UDP_PORT_CALC] Local IP: %s\n", localIP.toString().c_str());
-    Serial.printf("[UDP_PORT_CALC] Last octet: %d\n", lastOctet);
-    Serial.printf("[UDP_PORT_CALC] Calculated TOUCH_SERVER_PORT: %d\n", TOUCH_SERVER_PORT);
-    Serial.printf("[UDP_PORT_CALC] Calculated LOCAL_TOUCH_PORT: %d\n", LOCAL_TOUCH_PORT);
+    // Serial.printf("[UDP_PORT_CALC] Local IP: %s\n", localIP.toString().c_str());
+    // Serial.printf("[UDP_PORT_CALC] Last octet: %d\n", lastOctet);
+    // Serial.printf("[UDP_PORT_CALC] Calculated TOUCH_SERVER_PORT: %d\n", TOUCH_SERVER_PORT);
+    // Serial.printf("[UDP_PORT_CALC] Calculated LOCAL_TOUCH_PORT: %d\n", LOCAL_TOUCH_PORT);
 }
 
 // ===== UDP TOUCH INITIALIZATION =====
 bool initUDPTouch() {
-    Serial.println("[UDP_TOUCH] Khởi tạo UDP Touch module...");
+    // Serial.println("[UDP_TOUCH] Khởi tạo UDP Touch module...");
     
     // Tạo mutex cho UDP
     if (udpMutex == NULL) {
         udpMutex = xSemaphoreCreateMutex();
         if (udpMutex == NULL) {
-            Serial.println("[UDP_TOUCH] Lỗi: Không thể tạo mutex!");
+            // Serial.println("[UDP_TOUCH] Lỗi: Không thể tạo mutex!");
             return false;
         }
     }
     
     // Kiểm tra WiFi trước khi khởi tạo UDP
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[UDP_TOUCH] Lỗi: WiFi chưa kết nối!");
+        // Serial.println("[UDP_TOUCH] Lỗi: WiFi chưa kết nối!");
         return false;
     }
     
@@ -87,16 +93,16 @@ bool initUDPTouch() {
     
     // Khởi tạo UDP với port được tính toán
     if (!touch_udp.begin(LOCAL_TOUCH_PORT)) {
-        Serial.printf("[UDP_TOUCH] Lỗi: Không thể khởi tạo UDP trên port %d!\n", LOCAL_TOUCH_PORT);
+        // Serial.printf("[UDP_TOUCH] Lỗi: Không thể khởi tạo UDP trên port %d!\n", LOCAL_TOUCH_PORT);
         return false;
     }
     
     // Thiết lập địa chỉ Touch Server từ main.h
     touch_server_address.fromString(SERVER_IP);
     
-    Serial.printf("[UDP_TOUCH] Local UDP Port: %d\n", LOCAL_TOUCH_PORT);
-    Serial.printf("[UDP_TOUCH] Touch Server: %s:%d (calculated from IP)\n", SERVER_IP, TOUCH_SERVER_PORT);
-    Serial.println("[UDP_TOUCH] UDP Touch module sẵn sàng!");
+    // Serial.printf("[UDP_TOUCH] Local UDP Port: %d\n", LOCAL_TOUCH_PORT);
+    // Serial.printf("[UDP_TOUCH] Touch Server: %s:%d (calculated from IP)\n", SERVER_IP, TOUCH_SERVER_PORT);
+    // Serial.println("[UDP_TOUCH] UDP Touch module sẵn sàng!");
     
     return true;
 }
@@ -183,7 +189,7 @@ bool dequeueUDPMessage(char* message, size_t maxLen) {
 }
 
 // ===== CORE UDP SEND FUNCTION =====
-bool sendUDPPacket(const char* message, UDPPriority priority, bool immediate = false) {
+bool sendUDPPacket(const char* message, UDPPriority priority, bool immediate) {
     if (!isUDPTouchReady()) {
         return false;
     }
@@ -313,7 +319,7 @@ int availableUDPData() {
 
 int receiveUDPData(char* buffer, int bufferSize) {
     if (!isUDPTouchReady()) {
-        Serial.println("[UDP_RECEIVE] Lỗi: WiFi chưa kết nối!");
+        // Serial.println("[UDP_RECEIVE] Lỗi: WiFi chưa kết nối!");
         return -1;
     }
     
@@ -324,12 +330,12 @@ int receiveUDPData(char* buffer, int bufferSize) {
         buffer[bytesRead] = '\0'; // Null terminate
         
         // In thông tin về packet nhận được
-        IPAddress remoteIP = touch_udp.remoteIP();
-        int remotePort = touch_udp.remotePort();
+        // IPAddress remoteIP = touch_udp.remoteIP();
+        // int remotePort = touch_udp.remotePort();
         
-        Serial.printf("[UDP_RECEIVE] Nhận %d bytes từ %s:%d\n", 
-                     bytesRead, remoteIP.toString().c_str(), remotePort);
-        Serial.printf("[UDP_RECEIVE] Dữ liệu: %s\n", buffer);
+        // Serial.printf("[UDP_RECEIVE] Nhận %d bytes từ %s:%d\n", 
+        //              bytesRead, remoteIP.toString().c_str(), remotePort);
+        // Serial.printf("[UDP_RECEIVE] Dữ liệu: %s\n", buffer);
     }
     
     return bytesRead;
@@ -344,9 +350,10 @@ void handleUDPReceive() {
     static unsigned long lastTouchUpdate = 0;
     if (millis() - lastTouchUpdate > 50) {
         lastTouchUpdate = millis();
-        touchActive = isTouchActive();
-        touchDuration = getTouchDuration();
-        applyColorWithBrightness(touchActive, r, g, b);
+        // COMMENTED - PIC touch functions removed
+        // touchActive = isTouchActive();
+        // touchDuration = getTouchDuration();
+        // applyColorWithBrightness(touchActive, r, g, b);
     }
     
     int packetSize = touch_udp.parsePacket();
@@ -387,8 +394,8 @@ void handleUDPReceive() {
                 // Gửi qua UART
                 sendUARTCommand(String(uartCommand));
                 
-                Serial.printf("[UDP_THRESHOLD] Nhận threshold: %d -> Gửi UART: %s\n", 
-                             thresholdValue, uartCommand);
+                // Serial.printf("[UDP_THRESHOLD] Nhận threshold: %d -> Gửi UART: %s\n", 
+                //              thresholdValue, uartCommand);
             }
             
             // ✅ Xử lý lệnh XILANH
@@ -400,16 +407,13 @@ void handleUDPReceive() {
                 int xiLanhValue = valueStr.toInt();
                 
                 if (xiLanhValue == 1) {
-                    digitalWrite(2, HIGH);
-                    digitalWrite(15, LOW);
-                    Serial.println("[UDP_XILANH] IO15 -> HIGH (Xi lanh DOWN)");
+                    sendUARTCommand("XILANH_DOWN");
+                    // Serial.println("[UDP_XILANH] IO15 -> HIGH (Xi lanh DOWN)");
                 } else if (xiLanhValue == 2) {
-                    digitalWrite(2, LOW);
-                    digitalWrite(15, HIGH);
-                    Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh UP)");
+                    sendUARTCommand("XILANH_UP");
+                    // Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh UP)");
                 } else if (xiLanhValue == 0) {
-                    digitalWrite(2, LOW);
-                    digitalWrite(15, LOW);
+                    sendUARTCommand("XILANH_STOP");
                     Serial.println("[UDP_XILANH] IO15 -> LOW (Xi lanh STOP)");
                 }
                 
@@ -455,6 +459,70 @@ void handleUDPReceive() {
                 
                 // Note: Các bước tiếp theo sẽ được xử lý trong processRecalibration()
                 // Cần gọi processRecalibration() trong loop()
+            }
+            
+            // ✅ Xử lý lệnh CALIB NORTH - Xoay về Bắc (0°) rồi set offset
+            else if (data.equals("CALIB_NORTH")) {
+                currentRotateTarget = ROTATE_TO_NORTH;
+                rotateStartTime = millis();
+                Serial.println("[UDP_CALIB] Bắt đầu xoay về BẮC để hiệu chỉnh (0°)");
+                sendUDPPacket("CALIB:NORTH_ROTATING", UDP_PRIORITY_NORMAL);
+            }
+            
+            // ✅ Xử lý lệnh CALIB EAST - Xoay về Đông (90°) rồi set offset
+            else if (data.equals("CALIB_EAST")) {
+                currentRotateTarget = ROTATE_TO_EAST;
+                rotateStartTime = millis();
+                Serial.println("[UDP_CALIB] Bắt đầu xoay về ĐÔNG để hiệu chỉnh (90°)");
+                sendUDPPacket("CALIB:EAST_ROTATING", UDP_PRIORITY_NORMAL);
+            }
+            
+            // ✅ Xử lý lệnh CALIB SOUTH - Xoay về Nam (180°) rồi set offset
+            else if (data.equals("CALIB_SOUTH")) {
+                currentRotateTarget = ROTATE_TO_SOUTH;
+                rotateStartTime = millis();
+                Serial.println("[UDP_CALIB] Bắt đầu xoay về NAM để hiệu chỉnh (180°)");
+                sendUDPPacket("CALIB:SOUTH_ROTATING", UDP_PRIORITY_NORMAL);
+            }
+            
+            // ✅ Xử lý lệnh CALIB WEST - Xoay về Tây (270°) rồi set offset
+            else if (data.equals("CALIB_WEST")) {
+                currentRotateTarget = ROTATE_TO_WEST;
+                rotateStartTime = millis();
+                Serial.println("[UDP_CALIB] Bắt đầu xoay về TÂY để hiệu chỉnh (270°)");
+                sendUDPPacket("CALIB:WEST_ROTATING", UDP_PRIORITY_NORMAL);
+            }
+            
+            // ✅ Xoay về hướng Bắc (0°)
+            else if (data.equals("ROTATE_NORTH")) {
+                currentRotateTarget = ROTATE_TO_NORTH;
+                rotateStartTime = millis();
+                Serial.println("[UDP_ROTATE] Bắt đầu xoay về hướng BẮC (0°)");
+                sendUDPPacket("ROTATE:NORTH_START", UDP_PRIORITY_NORMAL);
+            }
+            
+            // ✅ Xoay về hướng Đông (90°)
+            else if (data.equals("ROTATE_EAST")) {
+                currentRotateTarget = ROTATE_TO_EAST;
+                rotateStartTime = millis();
+                Serial.println("[UDP_ROTATE] Bắt đầu xoay về hướng ĐÔNG (90°)");
+                sendUDPPacket("ROTATE:EAST_START", UDP_PRIORITY_NORMAL);
+            }
+            
+            // ✅ Xoay về hướng Nam (180°)
+            else if (data.equals("ROTATE_SOUTH")) {
+                currentRotateTarget = ROTATE_TO_SOUTH;
+                rotateStartTime = millis();
+                Serial.println("[UDP_ROTATE] Bắt đầu xoay về hướng NAM (180°)");
+                sendUDPPacket("ROTATE:SOUTH_START", UDP_PRIORITY_NORMAL);
+            }
+            
+            // ✅ Xoay về hướng Tây (270°)
+            else if (data.equals("ROTATE_WEST")) {
+                currentRotateTarget = ROTATE_TO_WEST;
+                rotateStartTime = millis();
+                Serial.println("[UDP_ROTATE] Bắt đầu xoay về hướng TÂY (270°)");
+                sendUDPPacket("ROTATE:WEST_START", UDP_PRIORITY_NORMAL);
             }
             
             // ✅ Xử lý lệnh LED CONTROL
@@ -515,6 +583,61 @@ void handleUDPReceive() {
                 } else if (direction == 0) {
                     setLEDDirection(-1);
                     Serial.println("[UDP_LED] Direction -> DOWN (-1)");
+                }
+            }
+            
+            // ✅ Xử lý lệnh ROTATION
+            else if (data.startsWith("ROT:")) {
+                int colonPos = data.indexOf(':');
+                String valueStr = data.substring(colonPos + 1);
+                valueStr.trim();
+                
+                int rotation = valueStr.toInt();
+                
+                if (rotation == 1) {
+                    omniRotate(1, 100.0);  // Xoay thuận chiều
+                    Serial.println("[UDP_MOTOR] Rotation -> THUẬN CHIỀU (1)");
+                } else if (rotation == 0) {
+                    omniRotate(0, -100.0);  // Xoay nghịch chiều
+                    Serial.println("[UDP_MOTOR] Rotation -> NGHỊCH CHIỀU (0)");
+                }
+            }
+            
+            // ✅ Xử lý lệnh ROTVONG (Xoay theo số vòng)
+            // Format: ROTVONG:direction,turns
+            // Ví dụ: ROTVONG:1,2 = xoay thuận 2 vòng
+            else if (data.startsWith("ROTVONG:")) {
+                int colonPos = data.indexOf(':');
+                String params = data.substring(colonPos + 1);
+                params.trim();
+                
+                int commaPos = params.indexOf(',');
+                if (commaPos > 0) {
+                    int direction = params.substring(0, commaPos).toInt();
+                    float turns = params.substring(commaPos + 1).toFloat();
+                    
+                    // Tính toán thời gian cần để xoay
+                    // Tốc độ xoay: 100 RPM = 100 vòng/phút = 1.67 vòng/giây
+                    // Thời gian = số vòng / tốc độ xoay
+                    float rpm = 100.0;
+                    float timeSeconds = (turns * 60.0) / rpm; // Thời gian tính bằng giây
+                    unsigned long timeMs = (unsigned long)(timeSeconds * 1000);
+                    
+                    // Bắt đầu xoay
+                    omniRotate(direction, rpm);
+                    Serial.printf("[UDP_MOTOR] Rotating %s %.1f turns (%.1f seconds)\n", 
+                                  direction ? "CW" : "CCW", turns, timeSeconds);
+                    
+                    // Lưu thông tin để tự động dừng sau khi xoay xong
+                    static unsigned long rotateStartTime = 0;
+                    static unsigned long rotateDuration = 0;
+                    rotateStartTime = millis();
+                    rotateDuration = timeMs;
+                    
+                    // Tạo task tự động dừng (sử dụng millis() check trong loop)
+                    // Để đơn giản, sẽ xử lý trong processUDPTouch()
+                } else {
+                    Serial.println("[UDP_MOTOR] ROTVONG format error. Use: ROTVONG:dir,turns");
                 }
             }
             
@@ -660,11 +783,8 @@ void handleUDPReceive() {
                 direction.trim();
                 
                 Serial.printf("[UDP_MOVE] Received direction: %s (using default speed 15 cm/s)\n", direction.c_str());
-                
-                // Enable omni robot
-                setOmniEnabled(true);
-                
-                // ✅ Tốc độ mặc định 15 cm/s
+
+                // Tốc độ mặc định: 100 cm/s
                 float speed = 15.0f;
                 
                 if (direction == "FORWARD") {
@@ -672,15 +792,15 @@ void handleUDPReceive() {
                     Serial.println("[UDP_MOVE] ⬆️ Moving FORWARD");
                 } 
                 else if (direction == "BACKWARD") {
-                    omniForward(-speed);
+                    omniBackward(speed);
                     Serial.println("[UDP_MOVE] ⬇️ Moving BACKWARD");
                 } 
                 else if (direction == "LEFT") {
-                    omniStrafe(-speed);
+                    omniStrafeLeft(speed);
                     Serial.println("[UDP_MOVE] ⬅️ Moving LEFT (strafe)");
                 } 
                 else if (direction == "RIGHT") {
-                    omniStrafe(speed);
+                    omniStrafeRight(speed);
                     Serial.println("[UDP_MOVE] ➡️ Moving RIGHT (strafe)");
                 } 
                 else if (direction == "STOP") {
@@ -713,7 +833,7 @@ void sendIRADCValue(uint16_t adcRaw, float adcVoltage) {
 // Hàm gửi chỉ IR ADC raw (đơn giản hơn)
 void sendIRADCRaw(int index, uint16_t adcRaw) {
     char irAdcMessage[32];
-    snprintf(irAdcMessage, sizeof(irAdcMessage), "IR_ADC_%d:,%d", index, adcRaw);
+    snprintf(irAdcMessage, sizeof(irAdcMessage), "IR_ADC_RAW_%d:%d", index, adcRaw);
     sendUDPPacket(irAdcMessage, UDP_PRIORITY_LOW);
 }
 
@@ -809,10 +929,76 @@ void processRecalibration() {
     }
 }
 
+// ===== ROTATE TO DIRECTION PROCESSING =====
+void processRotateToDirection() {
+    if (currentRotateTarget == ROTATE_NONE) {
+        return;  // Không có lệnh xoay
+    }
+    
+    extern QMC5883L compass;
+    bool completed = false;
+    
+    // Kiểm tra timeout
+    if (millis() - rotateStartTime > MAX_ROTATE_TIME) {
+        Serial.println("[ROTATE] Timeout - dừng xoay");
+        omniStop();
+        currentRotateTarget = ROTATE_NONE;
+        sendUDPPacket("ROTATE:TIMEOUT", UDP_PRIORITY_NORMAL);
+        return;
+    }
+    
+    // Thực hiện xoay theo target
+    switch (currentRotateTarget) {
+        case ROTATE_TO_NORTH:
+            completed = compass.rotateToNorth(3.0f);  // tolerance 3°
+            if (completed) {
+                Serial.println("[ROTATE] Đã xoay đến BẮC (0°) - Set offset calibration");
+                compass.calibrateNorth();  // ✅ Set offset sau khi xoay xong
+                sendUDPPacket("CALIB:NORTH_DONE", UDP_PRIORITY_NORMAL);
+                currentRotateTarget = ROTATE_NONE;
+            }
+            break;
+            
+        case ROTATE_TO_EAST:
+            completed = compass.rotateToEast(3.0f);
+            if (completed) {
+                Serial.println("[ROTATE] Đã xoay đến ĐÔNG (90°) - Set offset calibration");
+                compass.calibrateEast();  // ✅ Set offset sau khi xoay xong
+                sendUDPPacket("CALIB:EAST_DONE", UDP_PRIORITY_NORMAL);
+                currentRotateTarget = ROTATE_NONE;
+            }
+            break;
+            
+        case ROTATE_TO_SOUTH:
+            completed = compass.rotateToSouth(3.0f);
+            if (completed) {
+                Serial.println("[ROTATE] Đã xoay đến NAM (180°) - Set offset calibration");
+                compass.calibrateSouth();  // ✅ Set offset sau khi xoay xong
+                sendUDPPacket("CALIB:SOUTH_DONE", UDP_PRIORITY_NORMAL);
+                currentRotateTarget = ROTATE_NONE;
+            }
+            break;
+            
+        case ROTATE_TO_WEST:
+            completed = compass.rotateToWest(3.0f);
+            if (completed) {
+                Serial.println("[ROTATE] Đã xoay đến TÂY (270°) - Set offset calibration");
+                compass.calibrateWest();  // ✅ Set offset sau khi xoay xong
+                sendUDPPacket("CALIB:WEST_DONE", UDP_PRIORITY_NORMAL);
+                currentRotateTarget = ROTATE_NONE;
+            }
+            break;
+            
+        default:
+            currentRotateTarget = ROTATE_NONE;
+            break;
+    }
+}
+
 // Hàm gửi tốc độ motor qua UDP
 void sendSpeed(int16_t s1, int16_t s2, int16_t s3) {
     char speedMessage[64];
     snprintf(speedMessage, sizeof(speedMessage), "SPEED:%d,%d,%d", s1, s2, s3);
-    // Serial.printf("[UDP_SPEED] Sending: %s\n", speedMessage);  // DEBUG
+    // Serial.printf("[UDP_SPEED] Sending: %s\n", speedMessage);  // DEBUG - Commented to reduce spam
     sendUDPPacket(speedMessage, UDP_PRIORITY_NORMAL);  // ✅ Ưu tiên NORMAL (giống COMPASS)
 }

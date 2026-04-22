@@ -1,5 +1,6 @@
 #include "IR.h"
 #include "udpconfig.h"
+#include "uart.h"
 
 // Khởi tạo biến statusIR toàn cục
 StatusIR statusIR = {
@@ -9,12 +10,12 @@ StatusIR statusIR = {
 
 int numOfSensor = 2;
 int rawAdcValue = 0;
-int thresholdValue = 2000;
+int thresholdValue = 1500;  // Giảm ngưỡng threshold
 
 // Biến lưu giá trị ADC trước đó để phát hiện thay đổi
 uint16_t lastRawValue_1 = 0;
 uint16_t lastRawValue_2 = 0;
-const uint16_t ADC_CHANGE_THRESHOLD = 100;  // Ngưỡng thay đổi tối thiểu (100/4095 ~ 2.4%)
+const uint16_t ADC_CHANGE_THRESHOLD = 20;  // Giảm ngưỡng thay đổi để gửi thường xuyên hơn
 
 // Biến lưu trạng thái trước đó để phát hiện swipe
 struct SwipeDetector {
@@ -34,19 +35,20 @@ struct SwipeDetector {
 SwipeDetector swipe1 = {false, false, false, false, 0, 0, 0, 0, 500, None, false};  // Mặt 1 (pin 1 và 2)
 
 
+// COMMENTED - ADC moved to UART module (GPIO 34, 35 now used for UART RX/TX)
 // Khởi tạo IR pins
-void initIR() {
-    // Cấu hình chân 25 và 26 làm analog output (DAC)
-    // ESP32 có DAC tích hợp trên chân 25 và 26
-    // Không cần cấu hình pinMode cho DAC
-    
-    // Cấu hình chân 35 làm analog input (ADC)
+// void initIR() {
+//     // Cấu hình chân 25 và 26 làm analog output (DAC)
+//     // ESP32 có DAC tích hợp trên chân 25 và 26
+//     // Không cần cấu hình pinMode cho DAC
+//     
+//     // Cấu hình chân 35 làm analog input (ADC)
 
-    pinMode(ANALOG_READ_PIN_1, INPUT);
-    pinMode(ANALOG_READ_PIN_2, INPUT);
-    
-    Serial.println("[IR_INIT] IR module khởi tạo thành công");
-}
+//     pinMode(ANALOG_READ_PIN_1, INPUT);
+//     pinMode(ANALOG_READ_PIN_2, INPUT);
+//     
+//     Serial.println("[IR_INIT] IR module khởi tạo thành công");
+// }
 
 // // Hàm xuất analog cho chân 25 (revLedOut)
 // void revLedOut(float voltage) {
@@ -76,22 +78,23 @@ void initIR() {
 //     dacWrite(TRAN_LED_PIN, dacValue);
 // }
 
+// COMMENTED - ADC moved to UART module
 // Hàm đọc giá trị analog từ chân 35 (0-3.3V)
-float analogReadVoltage(int pin) {
-    // Đọc giá trị ADC (0-4095 với độ phân giải 12-bit)
-    uint16_t adcValue = analogRead(pin);
-    
-    // Chuyển đổi ADC value sang voltage
-    // ESP32 ADC: 0-4095 tương ứng 0-3.3V
-    float voltage = adcValueToVoltage(adcValue);
-    
-    return voltage;
-}
+// float analogReadVoltage(int pin) {
+//     // Đọc giá trị ADC (0-4095 với độ phân giải 12-bit)
+//     uint16_t adcValue = analogRead(pin);
+//     
+//     // Chuyển đổi ADC value sang voltage
+//     // ESP32 ADC: 0-4095 tương ứng 0-3.3V
+//     float voltage = adcValueToVoltage(adcValue);
+//     
+//     return voltage;
+// }
 
 // Hàm đọc giá trị ADC raw (0-4095)
-uint16_t analogReadRaw(int pin) {
-    return analogRead(pin);
-}
+// uint16_t analogReadRaw(int pin) {
+//     return analogRead(pin);
+// }
 
 // Hàm chuyển đổi từ voltage sang DAC value (cho output)
 // ESP32 DAC có độ phân giải 8-bit (0-255)
@@ -125,12 +128,23 @@ float adcValueToVoltage(uint16_t adcValue) {
     return voltage;
 }
 
+// ADC data from UART module via adc_values[0] and adc_values[1]
 void handleIRModule() {
     unsigned long currentTime = millis();
     
-    // Đọc giá trị từ 2 pin (Pin 1 và Pin 2 tạo thành Mặt 1)
-    float inputVoltage_1 = analogReadVoltage(ANALOG_READ_PIN_1);
-    uint16_t rawValue_1 = analogReadRaw(ANALOG_READ_PIN_1);
+    // Lấy giá trị ADC đã xử lý từ hàm handleUART() - adc_values[0] và adc_values[1]
+    uint16_t rawValue_1 = (uint16_t)getADC(1);  // adc_values[0]
+    uint16_t rawValue_2 = (uint16_t)getADC(2);  // adc_values[1]
+    
+    // Debug: Kiểm tra giá trị ADC (Commented - reduce spam)
+    // static unsigned long lastDebug = 0;
+    // if (millis() - lastDebug > 1000) {
+    //     lastDebug = millis();
+    //     Serial.printf("[IR_DEBUG] ADC_1=%d, ADC_2=%d, Change_1=%d, Change_2=%d\n", 
+    //                   rawValue_1, rawValue_2, 
+    //                   abs((int)rawValue_1 - (int)lastRawValue_1),
+    //                   abs((int)rawValue_2 - (int)lastRawValue_2));
+    // }
     
     // Chỉ gửi nếu thay đổi > ngưỡng
     if (abs((int)rawValue_1 - (int)lastRawValue_1) > ADC_CHANGE_THRESHOLD) {
@@ -138,9 +152,6 @@ void handleIRModule() {
         lastRawValue_1 = rawValue_1;
     }
     // sendIRThreshold(1, thresholdValue);  // Bỏ qua để giảm UDP traffic
-    
-    float inputVoltage_2 = analogReadVoltage(ANALOG_READ_PIN_2);
-    uint16_t rawValue_2 = analogReadRaw(ANALOG_READ_PIN_2);
     
     // Chỉ gửi nếu thay đổi > ngưỡng
     if (abs((int)rawValue_2 - (int)lastRawValue_2) > ADC_CHANGE_THRESHOLD) {

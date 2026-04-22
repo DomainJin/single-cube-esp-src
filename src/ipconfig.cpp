@@ -86,8 +86,8 @@ void sendHeartbeat() {
     heartbeat_udp.write((uint8_t*)heartbeatMessage, strlen(heartbeatMessage));
     heartbeat_udp.endPacket();
     
-    Serial.printf("[HEARTBEAT] Gửi: %s -> %s:%d\n", 
-                 heartbeatMessage, SERVER_IP, SERVER_PORT);
+    // Serial.printf("[HEARTBEAT] Gửi: %s -> %s:%d\n", 
+    //              heartbeatMessage, SERVER_IP, SERVER_PORT);  // Commented to reduce spam
 }
 
 void handleHeartbeat() {

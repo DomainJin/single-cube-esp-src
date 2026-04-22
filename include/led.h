@@ -5,7 +5,8 @@
 #include <Adafruit_NeoPixel.h>
 
 // ===== LED CONFIGURATION =====
-#define LED_PIN 5
+// 📍 LED WS2812 - GPIO pin allocation (avoid conflicts)
+#define LED_PIN 0           // GPIO 0 - WS2812 data (strapping pin but safe for output after boot)
 #define NUM_LEDS 150
 #define UPDATE_INTERVAL 100  // ms
 

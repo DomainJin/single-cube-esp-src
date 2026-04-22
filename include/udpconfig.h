@@ -31,6 +31,15 @@ extern IPAddress touch_server_address;
 bool initUDPTouch();
 
 /**
+ * ✅ Core UDP packet send function
+ * @param message Message payload to send
+ * @param priority Message priority level
+ * @param immediate If true, send immediately; if false, queue for later
+ * @return true if sent/queued successfully, false if queue full
+ */
+bool sendUDPPacket(const char* message, UDPPriority priority, bool immediate = false);
+
+/**
  * Gửi touch value qua UDP đến server
  * @param touchMessage Chuỗi message cần gửi
  */
@@ -160,5 +169,22 @@ void processUDPQueue();
  * Gọi function này trong loop() để xử lý recalibration
  */
 void processRecalibration();
+
+/**
+ * Xử lý xoay robot về hướng (state machine)
+ * Gọi function này trong loop() để xử lý rotation to direction
+ */
+void processRotateToDirection();
+
+// ===== ROTATE TO DIRECTION STATE =====
+enum RotateDirection {
+    ROTATE_NONE = 0,
+    ROTATE_TO_NORTH = 1,
+    ROTATE_TO_EAST = 2,
+    ROTATE_TO_SOUTH = 3,
+    ROTATE_TO_WEST = 4
+};
+
+extern RotateDirection currentRotateTarget;
 
 #endif // UDP_CONFIG_H

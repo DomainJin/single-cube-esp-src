@@ -3,6 +3,7 @@
 // #include "mpu6050.h"  // Comment vì xung đột I2C
 #include "qmc5883l.h"
 #include "a4l.h"
+#include "3_motor.h"
 
 
 // Cấu hình WiFi
@@ -42,23 +43,26 @@ void setup() {
     digitalWrite(2, LOW);
     pinMode(15, OUTPUT);
     digitalWrite(15, LOW);
-    Serial.begin(115200);
-    Serial.println("\n===== ESP32 WS2812 TEST =====");
+    
+    // UART0 Debug - Chỉ TX (GPIO 1), không dùng RX (GPIO 3 để cho I2C)
+    // RX = -1 (disable), TX = 1 (default)
+    Serial.begin(115200, SERIAL_8N1, -1, 1);
+    // Serial.println("\n===== ESP32 WS2812 TEST =====");
     
     // ✅ Khởi tạo LED WS2812 đầu tiên
     initLED();
     
-    Serial.println("[SETUP] WS2812 hoàn thành!");
+    // Serial.println("[SETUP] WS2812 hoàn thành!");
     
     
     
     // Kết nối WiFi
     WiFi.begin(ssid, password);
-    Serial.print("Đang kết nối WiFi");
+    // Serial.print("Đang kết nối WiFi");
     
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
-        Serial.print(".");
+        // Serial.print(".");
     }
     
     // ✅ Tắt WiFi sleep mode để giảm latency
@@ -76,176 +80,111 @@ void setup() {
     
     // Khởi tạo các modules
     initOSC();
-    // initUART();
+    initUART();  // ✅ UART sử dụng GPIO 34 (RX), 35 (TX) để nhận dữ liệu ADC từ module ngoài
     initUDPTouch();
-    initIR();// Cấu hình pin IO15 cho xi lanh
-    
-
     a4lInit();
-
-    initIPConfig();  // Thêm dòng này
+    initIPConfig();  
+    init3Motors();
+    Serial.println("[SETUP] 3 Motor PID control system initialized!");
     
-    // ✅ Khởi tạo Motor Control System
-    setupMotors();
-    Serial.println("[SETUP] Motor control system initialized!");
-    
-    // ✅ Cấu hình và bật PID cho cả 3 motor (Kp cao để bù tải)
-    setMotorPID(motor1, 2.0, 0.1, 0.02);  // Tăng Kp để bù tải tốt hơn
-    setMotorPID(motor2, 2.0, 0.1, 0.02);
-    setMotorPID(motor3, 2.0, 0.1, 0.02);
-    
-    enableMotorPID(motor1, false);  // Tắt vì encoder không hoạt động
-    enableMotorPID(motor2, true);
-    enableMotorPID(motor3, false);  // Tắt vì encoder không hoạt động
-    Serial.println("[SETUP] Motor PID enabled (only M2)!");
-    
-    // ✅ Tạo PID task để cập nhật liên tục
-    xTaskCreate(
-        motorControlTask,     // Task function
-        "MotorPID",          // Task name
-        4096,                // Stack size
-        NULL,                // Parameters
-        1,                   // Priority
-        NULL                 // Task handle
-    );
-    Serial.println("[SETUP] Motor PID task created!");
-    
-    // ✅ Khởi tạo Omni Robot System
-    setupOmni();
-    Serial.println("[SETUP] Omni robot system initialized!");
-    
-    // ✅ Test encoder ngay sau khi setup
-    delay(1000);
-    Serial.println("\n========== ENCODER TEST ==========");
-    Serial.printf("Motor 1 encoder count: %ld\n", getEncoderCount(motor1));
-    Serial.printf("Motor 2 encoder count: %ld\n", getEncoderCount(motor2));
-    Serial.printf("Motor 3 encoder count: %ld\n", getEncoderCount(motor3));
-    Serial.println("(Should be 0 when motor stopped)");
-    Serial.println("==================================\n");
-    
-    // Khởi tạo MPU6050
-    // if (mpu.begin()) {
-    //     Serial.println("MPU6050 đã khởi tạo thành công!");
-    // } else {
-    //     Serial.println("Lỗi: Không thể khởi tạo MPU6050!");
-    // }
-    
-    // TEST I2C SCAN TRƯỚC KHI KHỞI TẠO COMPASS
-    Serial.println("\n===== I2C SCANNER TEST =====");
-    Wire.begin(16, 17);  // SDA=16, SCL=17
-    Wire.setClock(100000); // 100kHz
-    delay(200);
-    
-    Serial.println("Scanning I2C bus (0x00-0x7F)...");
-    int deviceCount = 0;
-    
-    for (uint8_t address = 0; address < 128; address++) {
+    // ✅ Khởi tạo I2C bus cho QMC5883L
+    Wire.begin(3, 22);  // SDA=3, SCL=22
+    Serial.println("[SETUP] I2C initialized: SDA=3, SCL=22");
+    delay(100);
+    // ===== I2C SCANNER =====
+    Serial.println("\n[I2C SCAN] Scanning I2C bus...");
+    int nDevices = 0;
+    for (byte address = 1; address < 127; address++) {
         Wire.beginTransmission(address);
-        uint8_t error = Wire.endTransmission();
+        byte error = Wire.endTransmission();
         
         if (error == 0) {
-            Serial.printf("  ==> Device found at 0x%02X", address);
-            if (address == 0x0D) Serial.print(" (QMC5883L!)");
+            Serial.print("[I2C SCAN] Device found at 0x");
+            if (address < 16) Serial.print("0");
+            Serial.print(address, HEX);
+            
+            // Nhận dạng thiết bị
+            if (address == 0x68 || address == 0x69) Serial.print(" <- MPU9250");
+            if (address == 0x0C) Serial.print(" <- AK8963 (magnetometer)");
+            if (address == 0x0D) Serial.print(" <- QMC5883L");
+            
             Serial.println();
-            deviceCount++;
+            nDevices++;
         }
-        delay(5);
     }
-    
-    if (deviceCount == 0) {
-        Serial.println("\n!!! NO I2C DEVICES FOUND !!!");
+    if (nDevices == 0) {
+        Serial.println("[I2C SCAN] No I2C devices found!");
+        Serial.println("[I2C SCAN] Check wiring: SDA=3, SCL=22");
+        Serial.println("[I2C SCAN] Check pull-up resistors (4.7kΩ)");
     } else {
-        Serial.printf("\nTotal: %d device(s) found\n", deviceCount);
+        Serial.printf("[I2C SCAN] Found %d device(s)\n", nDevices);
     }
-    Serial.println("=============================\n");
+    Serial.println("[I2C SCAN] Scan complete\n");
     
-    // Khởi tạo QMC5883L
-    if (compass.begin(16, 17)) {  // SDA=GPIO16, SCL=GPIO17
-        Serial.println("QMC5883L ready!");
-        compass.setDeclination(0.5);  // Vietnam ~0.5°
+    // ✅ Khởi tạo MPU9250 + AK8963 Compass
+    if (compass.begin(3, 22)) {
+        compass.setUpdateInterval(100);  // Cập nhật mỗi 100ms (10Hz) để responsive hơn
+        compass.enable();                // Bật module
+        Serial.println("[SETUP] MPU9250 compass initialized!");
     } else {
-        Serial.println("Failed to initialize QMC5883L!");
+        Serial.println("[SETUP] MPU9250 initialization FAILED!");
+        Serial.println("[SETUP] Possible issues:");
+        Serial.println("  - MPU9250 module not connected");
+        Serial.println("  - Wrong I2C address (check if 0x68 or 0x69)");
+        Serial.println("  - Missing pull-up resistors");
+        Serial.println("  - Faulty module or wiring");
     }
-    
-    Serial.println("Tất cả modules đã sẵn sàng!");
     
     // Gửi heartbeat đầu tiên
     sendESPStatus("READY");
 }
 
 void loop() {
-    // ✅ Kiểm tra WiFi connection mỗi 10 giây
+    // Kiểm tra WiFi connection mỗi 10 giây
     static unsigned long lastWiFiCheck = 0;
     if (millis() - lastWiFiCheck > 10000) {
         lastWiFiCheck = millis();
         if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("[WIFI] WARNING: WiFi disconnected! Reconnecting...");
             WiFi.reconnect();
-        } else {
-            // Chỉ log RSSI nếu yếu (< -70 dBm)
-            int rssi = WiFi.RSSI();
-            if (rssi < -70) {
-                Serial.printf("[WIFI] Weak signal: %d dBm\\n", rssi);
-            }
         }
     }
     
-    // handleUARTData();
+    handleUARTData();  // ✅ Xử lý dữ liệu ADC từ module ngoài qua UART
     handleUDPReceive();
     processUDPQueue();  // Xử lý hàng đợi UDP
     processRecalibration();  // ✅ Xử lý RECALIB không blocking
+    processRotateToDirection();  // ✅ Xử lý xoay về hướng chính
     handleHeartbeat();
-    handleIRModule();
+    handleIRModule();  // ✅ ADC moved to UART module, data comes via UART now
+    update3Motors();
+
+    // ✅ 9-DOF Sensor Fusion - Cập nhật liên tục
+    compass.updateFusion();
     
-    // ✅ Debug encoder liên tục (phát hiện ngoại lực tác động)
-    debugEncoderContinuous();
-    
-    // ✅ Update Omni Robot (MUST BE CALLED IN LOOP!)
-    updateOmni();
+    // ✅ Bù trượt từ sensor fusion (KHÔNG ghi đè lệnh UDP)
+    static unsigned long lastFusionApply = 0;
+    if (millis() - lastFusionApply > 200) {  // 5Hz update rate - giảm can thiệp
+        lastFusionApply = millis();
+        
+        float vx, vy, omega;
+        compass.getVelocities(vx, vy, omega);
+        
+        // Chỉ bù trượt, không điều khiển chính
+        // Gain nhỏ (5%) để không làm ảnh hưởng lệnh UDP
+        omniCompensateDrift(vx, vy, omega, 0.05f);
+    }
     
     // ✅ Gửi SPEED mỗi 500ms để realtime
     static unsigned long lastSpeedSend = 0;
     if (millis() - lastSpeedSend > 500) {
         lastSpeedSend = millis();
         
-        // ✅ Lấy RPM từ omni_state thay vì gọi getMotorRPM() lại (tránh conflict)
-        OmniRobotState* omni = getOmniState();
-        float rpm1 = omni->wheel_rpm[0];
-        float rpm2 = omni->wheel_rpm[1];
-        float rpm3 = omni->wheel_rpm[2];
-        
-        // Gửi tốc độ motor qua UDP
-        sendSpeed((int16_t)rpm1, (int16_t)rpm2, (int16_t)rpm3);
+        // Gửi tốc độ motor qua UDP từ 3_motor system
+        sendSpeed((int16_t)m1.rpmFilt, (int16_t)m2.rpmFilt, (int16_t)m3.rpmFilt);
     }
-    
-    // ===== TEST QMC5883L =====
-    static unsigned long lastSensorRead = 0;
-    if (millis() - lastSensorRead > 500) {  // Đọc mỗi 500ms
-        lastSensorRead = millis();
-        
-        // Đọc magnetometer từ QMC5883L
-        int16_t mx, my, mz;
-        if (compass.readMag(&mx, &my, &mz)) {
-            // Tính heading
-            float heading = compass.getHeading();
-            
-            // Lấy hướng cardinal (N, NE, E, ...)
-            String direction = compass.getCardinalDirection();
-            
-            // Gửi dữ liệu qua UDP
-            sendCompassHeading(heading, direction.c_str());  // Gửi heading + direction
-            sendCompassRaw(mx, my, mz);                      // Gửi raw mag data
-            
-            // In kết quả
-            // Serial.println("========================================");
-            // Serial.printf("QMC5883L Mag: X=%d, Y=%d, Z=%d\n", mx, my, mz);
-            // Serial.printf("Heading: %.1f°\n", heading);
-            // Serial.printf("Direction: %s\n", direction.c_str());
-            // Serial.println("========================================");
-        }
-    }
-    
-    
+
+    // ✅ QMC5883L COMPASS - Tự động đọc và gửi dữ liệu
+    compass.update();
     
     delay(10);  // Giảm delay xuống 10ms để responsive hơn
 }

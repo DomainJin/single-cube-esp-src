@@ -3,11 +3,14 @@
 
 #include <Arduino.h>
 
+// 📍 CỤM IR SENSORS - Chuyển sang module UART (GPIO 34, 35 sẽ dùng cho UART)
 // Định nghĩa chân
 // #define REV_LED_PIN 25      // Chân DAC1 (GPIO25) - revLedOut
 // #define TRAN_LED_PIN 26     // Chân DAC2 (GPIO26) - tranLedOut
-#define ANALOG_READ_PIN_1 34  // Chân ADC (GPIO34) - analogRead
-#define ANALOG_READ_PIN_2 35  // Chân ADC (GPIO35) - analogRead
+// 3 hiệu ADC đã chuyển sang module khác, giao tiếp qua UART
+// #define ANALOG_READ_PIN_1 34  // Chân ADC (GPIO34) - analogRead - Input-only [MOVED TO UART]
+// #define ANALOG_READ_PIN_2 35  // Chân ADC (GPIO35) - analogRead - Input-only [MOVED TO UART]
+// #define ANALOG_READ_PIN_3 36  // Chân ADC (GPIO36) - Tuỳ chọn nếu cần sensor thứ 3
 
 // Định nghĩa điện áp tối đa
 #define MAX_VOLTAGE 3.3
@@ -45,7 +48,7 @@ struct StatusIR {
 extern StatusIR statusIR;
 
 // Khai báo hàm
-void initIR();
+// void initIR();  // COMMENTED - ADC moved to UART module
 void revLedOut(float voltage);
 void tranLedOut(float voltage);
 void handleIRModule();
