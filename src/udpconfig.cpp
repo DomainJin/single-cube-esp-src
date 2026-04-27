@@ -2,7 +2,7 @@
 #include "IR.h"
 #include "a4l.h"
 #include "3_motor.h"  // ✅ Omni robot control with PID
-#include "qmc5883l.h"  // ✅ MPU9250 compass
+// #include "qmc5883l.h"  // Tắt I2C
 #include <stdio.h>
 
 // ===== UDP SEND CONTROL =====
@@ -736,36 +736,31 @@ void handleUDPReceive() {
                 Serial.printf("[UDP_ROBOT] Received: direction=%s, speed_pwm=%d, speed_cms=%.1f\n", 
                              direction.c_str(), speedValue, speed);
                 
-                // Enable omni robot
-                setOmniEnabled(true);
-                
                 if (direction == "FORWARD") {
                     omniForward(speed);
                     Serial.printf("[UDP_ROBOT] ⬆️ Moving FORWARD at %.1f cm/s (PWM:%d)\n", speed, speedValue);
-                } 
+                }
                 else if (direction == "BACKWARD") {
-                    omniForward(-speed);
+                    omniBackward(speed);
                     Serial.printf("[UDP_ROBOT] ⬇️ Moving BACKWARD at %.1f cm/s (PWM:%d)\n", speed, speedValue);
-                } 
+                }
                 else if (direction == "LEFT") {
-                    omniStrafe(-speed);
+                    omniStrafeLeft(speed);
                     Serial.printf("[UDP_ROBOT] ⬅️ Moving LEFT at %.1f cm/s (PWM:%d)\n", speed, speedValue);
-                } 
+                }
                 else if (direction == "RIGHT") {
-                    omniStrafe(speed);
+                    omniStrafeRight(speed);
                     Serial.printf("[UDP_ROBOT] ➡️ Moving RIGHT at %.1f cm/s (PWM:%d)\n", speed, speedValue);
-                } 
+                }
                 else if (direction == "ROTATE_LEFT") {
-                    // Quay trái: vận tốc góc 60 deg/s
-                    float angular_speed = (speedValue / 255.0f) * 180.0f;  // Tối đa 180 deg/s
-                    omniRotate(-angular_speed);  // Âm = quay trái (CCW)
-                    Serial.printf("[UDP_ROBOT] ↶ Rotating LEFT at %.1f deg/s (PWM:%d)\n", angular_speed, speedValue);
+                    float angular_rpm = (speedValue / 255.0f) * 100.0f;
+                    omniRotate(0, angular_rpm);  // dir=0: CCW
+                    Serial.printf("[UDP_ROBOT] ↶ Rotating LEFT at %.1f rpm (PWM:%d)\n", angular_rpm, speedValue);
                 }
                 else if (direction == "ROTATE_RIGHT") {
-                    // Quay phải: vận tốc góc 60 deg/s
-                    float angular_speed = (speedValue / 255.0f) * 180.0f;  // Tối đa 180 deg/s
-                    omniRotate(angular_speed);  // Dương = quay phải (CW)
-                    Serial.printf("[UDP_ROBOT] ↷ Rotating RIGHT at %.1f deg/s (PWM:%d)\n", angular_speed, speedValue);
+                    float angular_rpm = (speedValue / 255.0f) * 100.0f;
+                    omniRotate(1, angular_rpm);  // dir=1: CW
+                    Serial.printf("[UDP_ROBOT] ↷ Rotating RIGHT at %.1f rpm (PWM:%d)\n", angular_rpm, speedValue);
                 }
                 else if (direction == "STOP") {
                     omniStop();
@@ -776,6 +771,79 @@ void handleUDPReceive() {
                 }
             }
             
+            // ✅ Xử lý lệnh MOTOR:
+            // MOTOR:1,REVS,20        -> motor 1 quay 20 vòng tiến (60 RPM)
+            // MOTOR:1,REVS,-20       -> motor 1 quay 20 vòng lùi
+            // MOTOR:1,REVS,20,100    -> motor 1 quay 20 vòng @ 100 RPM
+            // MOTOR:1,REVS,0         -> motor 1 dừng ngay
+            // MOTOR:1,TEST           -> test motor 1: tiến 5v → lùi 5v → báo drift (60 RPM)
+            // MOTOR:1,TEST,10        -> test 10 vòng
+            // MOTOR:1,TEST,10,80     -> test 10 vòng @ 80 RPM
+            else if (data.startsWith("MOTOR:")) {
+                String params = data.substring(6);
+                params.trim();
+
+                int c1 = params.indexOf(',');
+                if (c1 < 0) {
+                    Serial.println("[UDP_MOTOR] Format: MOTOR:n,REVS,revs[,rpm] | MOTOR:n,TEST[,revs,rpm]");
+                } else {
+                    int    motorNum = params.substring(0, c1).toInt();
+                    String rest     = params.substring(c1 + 1);
+                    rest.trim();
+
+                    Motor *m = (motorNum == 1) ? &m1 : (motorNum == 2) ? &m2 : (motorNum == 3) ? &m3 : nullptr;
+                    if (!m) {
+                        Serial.printf("[UDP_MOTOR] Motor %d không tồn tại (dùng 1/2/3)\n", motorNum);
+
+                    // ── RUN (chạy max, ghi encoder, soft start) ─────────────
+                    } else if (rest.startsWith("RUN")) {
+                        int r1 = rest.indexOf(',');
+                        float rpm = (r1 >= 0) ? rest.substring(r1 + 1).toFloat() : 100.0f;
+                        if (rpm <= 0 || rpm > 100) rpm = 100.0f;
+                        motorRecordStart(motorNum, rpm);
+
+                    // ── STOP (soft stop, vẫn ghi đến khi dừng hẳn) ─────────
+                    } else if (rest.startsWith("STOP")) {
+                        motorRecordStop(motorNum);
+
+                    // ── RETURN (quay ngược đúng số vòng đã ghi) ─────────────
+                    } else if (rest.startsWith("RETURN")) {
+                        motorRecordReturn(motorNum);
+
+                    // ── TEST mode ───────────────────────────────────────────
+                    } else if (rest.startsWith("TEST")) {
+                        // Tách thêm: TEST[,revs[,rpm]]
+                        int t1 = rest.indexOf(',');
+                        int t2 = (t1 >= 0) ? rest.indexOf(',', t1 + 1) : -1;
+                        float revs = (t1 >= 0) ? rest.substring(t1 + 1, (t2 > 0) ? t2 : rest.length()).toFloat() : 5.0f;
+                        float rpm  = (t2 >= 0) ? rest.substring(t2 + 1).toFloat() : 60.0f;
+                        if (fabs(revs) < 0.1f) revs = 5.0f;  // revs âm = lùi trước, dương = tiến trước
+                        if (rpm  <= 0) rpm  = 60.0f;
+                        motorStartTest(motorNum, revs, rpm);
+
+                    // ── REVS mode ────────────────────────────────────────────
+                    } else if (rest.startsWith("REVS")) {
+                        int r1 = rest.indexOf(',');
+                        int r2 = (r1 >= 0) ? rest.indexOf(',', r1 + 1) : -1;
+                        if (r1 < 0) {
+                            Serial.println("[UDP_MOTOR] REVS cần giá trị: MOTOR:1,REVS,20");
+                        } else {
+                            float revs = rest.substring(r1 + 1, (r2 > 0) ? r2 : rest.length()).toFloat();
+                            float rpm  = (r2 >= 0) ? rest.substring(r2 + 1).toFloat() : 60.0f;
+                            if (revs == 0) {
+                                setMotorTargetRPM(*m, 0);
+                                Serial.printf("[UDP_MOTOR] M%d STOP\n", motorNum);
+                            } else {
+                                motorRunRevs(*m, revs, rpm);
+                                Serial.printf("[UDP_MOTOR] M%d: %.1f vòng @ %.1f RPM\n", motorNum, revs, rpm);
+                            }
+                        }
+                    } else {
+                        Serial.printf("[UDP_MOTOR] Lệnh không rõ: %s\n", rest.c_str());
+                    }
+                }
+            }
+
             // ✅ Xử lý lệnh MOVE cũ (backward compatibility)
             else if (data.startsWith("MOVE:")) {
                 int colonPos = data.indexOf(':');
@@ -935,64 +1003,8 @@ void processRotateToDirection() {
         return;  // Không có lệnh xoay
     }
     
-    extern QMC5883L compass;
-    bool completed = false;
-    
-    // Kiểm tra timeout
-    if (millis() - rotateStartTime > MAX_ROTATE_TIME) {
-        Serial.println("[ROTATE] Timeout - dừng xoay");
-        omniStop();
-        currentRotateTarget = ROTATE_NONE;
-        sendUDPPacket("ROTATE:TIMEOUT", UDP_PRIORITY_NORMAL);
-        return;
-    }
-    
-    // Thực hiện xoay theo target
-    switch (currentRotateTarget) {
-        case ROTATE_TO_NORTH:
-            completed = compass.rotateToNorth(3.0f);  // tolerance 3°
-            if (completed) {
-                Serial.println("[ROTATE] Đã xoay đến BẮC (0°) - Set offset calibration");
-                compass.calibrateNorth();  // ✅ Set offset sau khi xoay xong
-                sendUDPPacket("CALIB:NORTH_DONE", UDP_PRIORITY_NORMAL);
-                currentRotateTarget = ROTATE_NONE;
-            }
-            break;
-            
-        case ROTATE_TO_EAST:
-            completed = compass.rotateToEast(3.0f);
-            if (completed) {
-                Serial.println("[ROTATE] Đã xoay đến ĐÔNG (90°) - Set offset calibration");
-                compass.calibrateEast();  // ✅ Set offset sau khi xoay xong
-                sendUDPPacket("CALIB:EAST_DONE", UDP_PRIORITY_NORMAL);
-                currentRotateTarget = ROTATE_NONE;
-            }
-            break;
-            
-        case ROTATE_TO_SOUTH:
-            completed = compass.rotateToSouth(3.0f);
-            if (completed) {
-                Serial.println("[ROTATE] Đã xoay đến NAM (180°) - Set offset calibration");
-                compass.calibrateSouth();  // ✅ Set offset sau khi xoay xong
-                sendUDPPacket("CALIB:SOUTH_DONE", UDP_PRIORITY_NORMAL);
-                currentRotateTarget = ROTATE_NONE;
-            }
-            break;
-            
-        case ROTATE_TO_WEST:
-            completed = compass.rotateToWest(3.0f);
-            if (completed) {
-                Serial.println("[ROTATE] Đã xoay đến TÂY (270°) - Set offset calibration");
-                compass.calibrateWest();  // ✅ Set offset sau khi xoay xong
-                sendUDPPacket("CALIB:WEST_DONE", UDP_PRIORITY_NORMAL);
-                currentRotateTarget = ROTATE_NONE;
-            }
-            break;
-            
-        default:
-            currentRotateTarget = ROTATE_NONE;
-            break;
-    }
+    // Compass disabled (I2C off) - cancel any pending rotate
+    currentRotateTarget = ROTATE_NONE;
 }
 
 // Hàm gửi tốc độ motor qua UDP

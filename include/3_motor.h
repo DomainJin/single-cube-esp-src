@@ -21,9 +21,9 @@
 #define ENC3_B     25
 
 //================= Encoder spec =================
-#define ENCODER_PPR 12
-#define GEAR_RATIO  19
-#define ENCODER_CPR (ENCODER_PPR * GEAR_RATIO) // 228 xung/vòng trục ra (bắt RISING kênh A)
+#define ENCODER_PPR  12
+#define GEAR_RATIO   21   // Đo thực tế từ test: CPR_X1≈253 ≈ 12×21
+#define ENCODER_CPR  (ENCODER_PPR * 4 * GEAR_RATIO)  // X4 quadrature (cả 2 cạnh, cả 2 kênh) = 1008
 
 //================= PWM config ===================
 #define PWM_FREQ        2000
@@ -74,14 +74,17 @@ struct Motor {
 extern Motor m1, m2, m3;
 extern unsigned long lastRPMt;
 
-//================= ISR declarations ==============
-void IRAM_ATTR enc1ISR();
-void IRAM_ATTR enc2ISR();
-void IRAM_ATTR enc3ISR();
+//================= ISR declarations (X4 quadrature: 2 ISR per motor) ==
+void IRAM_ATTR enc1_A_ISR();
+void IRAM_ATTR enc1_B_ISR();
+void IRAM_ATTR enc2_A_ISR();
+void IRAM_ATTR enc2_B_ISR();
+void IRAM_ATTR enc3_A_ISR();
+void IRAM_ATTR enc3_B_ISR();
 
 //================= Function declarations =========
 void setupMotor(Motor &m);
-void setupEncoder(Motor &m, void (*isr)());
+void setupEncoder(Motor &m, void (*isrA)(), void (*isrB)());
 void applyPWM(Motor &m, int pwm, bool forward);
 void updateRPMAll();
 float stepPID(Motor &m, float target_rpm);
@@ -110,5 +113,20 @@ void omniStrafeLeft(float speed_cm_s);  // Trái (strafe)
 void omniStrafeRight(float speed_cm_s); // Phải (strafe)
 void omniRotate(int dir, float rpm = 100.0); // Xoay tròn (dir: 1=thuận, 0=nghịch)
 void omniStop();                       // Dừng
+
+// Position control: quay đúng số vòng rồi tự dừng
+// revs > 0: tiến, revs < 0: lùi; rpm là tốc độ (mặc định 60)
+void motorRunRevs(Motor &m, float revs, float rpm = 60.0f);
+bool motorPosActive(Motor &m);  // true nếu đang chạy position mode
+
+// Test mode: tiến N vòng → dừng 500ms → lùi N vòng → báo drift
+void motorStartTest(int motorNum, float revs = 5.0f, float rpm = 60.0f);
+void updateMotorTest();  // gọi từ loop()
+
+// Record & Return: chạy tự do → STOP (soft, vẫn ghi) → RETURN đúng số vòng
+void motorRecordStart(int motorNum, float rpm = 100.0f);
+void motorRecordStop(int motorNum);
+void motorRecordReturn(int motorNum);
+void updateMotorRecord();  // gọi từ loop()
 
 #endif // THREE_MOTOR_H
