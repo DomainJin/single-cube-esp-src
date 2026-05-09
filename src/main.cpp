@@ -1,9 +1,22 @@
 #include <Arduino.h>
 #include "main.h"
+
 // #include "mpu6050.h"  // Comment vì xung đột I2C
 // #include "qmc5883l.h"  // Tắt I2C
-#include "a4l.h"
+
 #include "3_motor.h"
+
+// ── Chọn chế độ robot ─────────────────────────────────────────────────
+// Bỏ comment dòng dưới để kích hoạt mecanum 4 bánh.
+// Giữ comment → omni 3 bánh (mặc định).
+#define ROBOT_MODE_MECANUM
+// ─────────────────────────────────────────────────────────────────────
+#ifdef ROBOT_MODE_MECANUM
+#include "4_mecanum.h"
+#elif
+#include "a4l.h"
+#define Omni
+#endif
 
 
 // Cấu hình WiFi
@@ -13,7 +26,7 @@ const char* password = "19121996";
 // const char* password = "19121996";
 
 // Cấu hình Server - Chung cho tất cả modules
-const char* SERVER_IP = "192.168.1.111";  // IP server nhận UDP
+const char* SERVER_IP = "192.168.1.115";  // IP server nhận UDP
 int SERVER_PORT = 1509;                   // Port server nhận UDP
 
 WiFiUDP udp;
@@ -38,18 +51,19 @@ int mainEffectime = 6000;    // 6 giây main effect chạy
 
 
 void setup() {
+    delay(1000);  // Đợi 1 giây sau khi khởi động để ổn định nguồn
     pinMode(2, OUTPUT);
     digitalWrite(2, LOW);
-    pinMode(15, OUTPUT);
-    digitalWrite(15, LOW);
-    
     // UART0 Debug - Chỉ TX (GPIO 1), không dùng RX (GPIO 3 để cho I2C)
     // RX = -1 (disable), TX = 1 (default)
     Serial.begin(115200, SERIAL_8N1, -1, 1);
+    delay(100);
+    // initMux() phải gọi SAU Serial.begin() vì Serial.begin() reclaim GPIO3 (UART0 RX)
+    initMux();
+    testMux();  // DEBUG SPI: bo comment sau khi xac nhan
     // Serial.println("\n===== ESP32 WS2812 TEST =====");
     
-    // ✅ Khởi tạo LED WS2812 đầu tiên
-    initLED();
+    
     
     // Serial.println("[SETUP] WS2812 hoàn thành!");
     
@@ -79,12 +93,21 @@ void setup() {
     
     // Khởi tạo các modules
     initOSC();
-    initUART();  // ✅ UART sử dụng GPIO 34 (RX), 35 (TX) để nhận dữ liệu ADC từ module ngoài
+     // ✅ UART sử dụng GPIO 34 (RX), 35 (TX) để nhận dữ liệu ADC từ module ngoài
     initUDPTouch();
+    #ifdef Omni
     a4lInit();
+    initUART(); 
+    // ✅ Khởi tạo LED WS2812 đầu tiên
+    initLED();
+    #endif
     initIPConfig();  
     init3Motors();
     Serial.println("[SETUP] 3 Motor PID control system initialized!");
+#ifdef ROBOT_MODE_MECANUM
+    init4Mecanum();
+    Serial.println("[SETUP] 4 Motor Mecanum system initialized!");
+#endif
     
     // I2C / Compass disabled
     
@@ -102,16 +125,41 @@ void loop() {
         }
     }
     
-    handleUARTData();  // ✅ Xử lý dữ liệu ADC từ module ngoài qua UART
+    // handleUARTData();  // ✅ Xử lý dữ liệu ADC từ module ngoài qua UART
     handleUDPReceive();
     processUDPQueue();  // Xử lý hàng đợi UDP
     processRecalibration();  // ✅ Xử lý RECALIB không blocking
     processRotateToDirection();  // ✅ Xử lý xoay về hướng chính
     handleHeartbeat();
-    handleIRModule();  // ✅ ADC moved to UART module, data comes via UART now
+    // handleIRModule();  // ✅ ADC moved to UART module, data comes via UART now
+    scanMux16();
+    sendIRAllBoards();
+
+    // IR log — uncomment để debug
+    // static unsigned long lastMuxLog = 0;
+    // if (millis() - lastMuxLog > 500) {
+    //     lastMuxLog = millis();
+    //     Serial.print("[B1 ADC]");
+    //     for (int i = 0; i < MUX_CHANNELS; i++) Serial.printf(" %4d", muxData[0][i]);
+    //     Serial.println();
+    //     Serial.print("[B1 DIG]");
+    //     for (int i = 0; i < MUX_CHANNELS; i++) Serial.printf(" %d", muxDigital[0][i]);
+    //     Serial.println();
+    //     Serial.print("[B2 ADC]");
+    //     for (int i = 0; i < MUX_CHANNELS; i++) Serial.printf(" %4d", muxData[1][i]);
+    //     Serial.println();
+    //     Serial.print("[B2 DIG]");
+    //     for (int i = 0; i < MUX_CHANNELS; i++) Serial.printf(" %d", muxDigital[1][i]);
+    //     Serial.println();
+    // }
+
     update3Motors();
     updateMotorTest();
     updateMotorRecord();
+#ifdef ROBOT_MODE_MECANUM
+    update4Mecanum();
+
+#endif
 
     // compass.updateFusion();  // Tắt I2C
     

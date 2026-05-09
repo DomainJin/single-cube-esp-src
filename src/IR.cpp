@@ -1,283 +1,100 @@
 #include "IR.h"
 #include "udpconfig.h"
 #include "uart.h"
+#include <driver/gpio.h>
 
-// Khởi tạo biến statusIR toàn cục
-StatusIR statusIR = {
-    .Pin = {0, 0, 0, 0, 0, 0},  // Tất cả pin ban đầu = 0
-    .Face = {None, None, None, None, None, None}  // Tất cả mặt ban đầu = None
-};
+// ===== Direct GPIO Mux — 16 channel x 2 board =====
 
-int numOfSensor = 2;
-int rawAdcValue = 0;
-int thresholdValue = 1500;  // Giảm ngưỡng threshold
+uint16_t muxData[2][MUX_CHANNELS];
+uint16_t muxThreshold[2][MUX_CHANNELS];
+uint8_t  muxDigital[2][MUX_CHANNELS];
 
-// Biến lưu giá trị ADC trước đó để phát hiện thay đổi
-uint16_t lastRawValue_1 = 0;
-uint16_t lastRawValue_2 = 0;
-const uint16_t ADC_CHANGE_THRESHOLD = 20;  // Giảm ngưỡng thay đổi để gửi thường xuyên hơn
-
-// Biến lưu trạng thái trước đó để phát hiện swipe
-struct SwipeDetector {
-    bool pin1WasActive;
-    bool pin2WasActive;
-    bool pin1JustReleased;      // Pin 1 vừa được thả ra
-    bool pin2JustReleased;      // Pin 2 vừa được thả ra
-    unsigned long pin1ReleaseTime;  // Thời điểm Pin 1 tắt
-    unsigned long pin2ReleaseTime;  // Thời điểm Pin 2 tắt
-    unsigned long pin1ActiveTime;
-    unsigned long pin2ActiveTime;
-    unsigned long swipeTimeout;  // Thời gian tối đa giữa 2 lần chạm (ms)
-    FaceStatus lastStatus;       // Lưu trạng thái trước đó để tránh gửi lặp
-    bool swipeDetected;          // Cờ đánh dấu đã phát hiện swipe
-};
-
-SwipeDetector swipe1 = {false, false, false, false, 0, 0, 0, 0, 500, None, false};  // Mặt 1 (pin 1 và 2)
-
-
-// COMMENTED - ADC moved to UART module (GPIO 34, 35 now used for UART RX/TX)
-// Khởi tạo IR pins
-// void initIR() {
-//     // Cấu hình chân 25 và 26 làm analog output (DAC)
-//     // ESP32 có DAC tích hợp trên chân 25 và 26
-//     // Không cần cấu hình pinMode cho DAC
-//     
-//     // Cấu hình chân 35 làm analog input (ADC)
-
-//     pinMode(ANALOG_READ_PIN_1, INPUT);
-//     pinMode(ANALOG_READ_PIN_2, INPUT);
-//     
-//     Serial.println("[IR_INIT] IR module khởi tạo thành công");
-// }
-
-// // Hàm xuất analog cho chân 25 (revLedOut)
-// void revLedOut(float voltage) {
-//     // Kiểm tra giá trị đầu vào
-//     if (voltage < 0.0) {
-//         voltage = 0.0;
-//     } else if (voltage > MAX_VOLTAGE) {
-//         voltage = MAX_VOLTAGE;
-//     }
-    
-//     // Chuyển đổi voltage thành DAC value và xuất ra
-//     uint16_t dacValue = voltageToDACValue(voltage);
-//     dacWrite(REV_LED_PIN, dacValue);
-// }
-
-// // Hàm xuất analog cho chân 26 (tranLedOut)
-// void tranLedOut(float voltage) {
-//     // Kiểm tra giá trị đầu vào
-//     if (voltage < 0.0) {
-//         voltage = 0.0;
-//     } else if (voltage > MAX_VOLTAGE) {
-//         voltage = MAX_VOLTAGE;
-//     }
-    
-//     // Chuyển đổi voltage thành DAC value và xuất ra
-//     uint16_t dacValue = voltageToDACValue(voltage);
-//     dacWrite(TRAN_LED_PIN, dacValue);
-// }
-
-// COMMENTED - ADC moved to UART module
-// Hàm đọc giá trị analog từ chân 35 (0-3.3V)
-// float analogReadVoltage(int pin) {
-//     // Đọc giá trị ADC (0-4095 với độ phân giải 12-bit)
-//     uint16_t adcValue = analogRead(pin);
-//     
-//     // Chuyển đổi ADC value sang voltage
-//     // ESP32 ADC: 0-4095 tương ứng 0-3.3V
-//     float voltage = adcValueToVoltage(adcValue);
-//     
-//     return voltage;
-// }
-
-// Hàm đọc giá trị ADC raw (0-4095)
-// uint16_t analogReadRaw(int pin) {
-//     return analogRead(pin);
-// }
-
-// Hàm chuyển đổi từ voltage sang DAC value (cho output)
-// ESP32 DAC có độ phân giải 8-bit (0-255)
-// Điện áp tham chiếu là 3.3V
-uint16_t voltageToDACValue(float voltage) {
-    // Công thức: DAC_VALUE = (voltage / 3.3) * 255
-    uint16_t dacValue = (uint16_t)((voltage / MAX_VOLTAGE) * 255.0);
-    
-    // Đảm bảo giá trị trong khoảng 0-255
-    if (dacValue > 255) {
-        dacValue = 255;
+void setThreshold(uint8_t board, uint8_t ch, uint16_t thr) {
+    if (board < 2 && ch < MUX_CHANNELS) {
+        muxThreshold[board][ch] = thr;
+        // ✅ DEBUG: Log thresholds cao (> 3000)
+        if (thr > 3000) {
+            Serial.printf("[THRESH_SET] B%d-CH%d: %d\n", board, ch, thr);
+        }
     }
-    
-    return dacValue;
 }
 
-// Hàm chuyển đổi từ ADC value sang voltage (cho input)
-// ESP32 ADC có độ phân giải 12-bit (0-4095)
-// Điện áp tham chiếu là 3.3V
-float adcValueToVoltage(uint16_t adcValue) {
-    // Công thức: VOLTAGE = (adcValue / 4095) * 3.3
-    float voltage = (adcValue / 4095.0) * MAX_VOLTAGE;
-    
-    // Đảm bảo giá trị trong khoảng 0-3.3V
-    if (voltage < 0.0) {
-        voltage = 0.0;
-    } else if (voltage > MAX_VOLTAGE) {
-        voltage = MAX_VOLTAGE;
-    }
-    
-    return voltage;
+void setThresholdAll(uint16_t thr) {
+    for (uint8_t b = 0; b < 2; b++)
+        for (uint8_t ch = 0; ch < MUX_CHANNELS; ch++)
+            muxThreshold[b][ch] = thr;
 }
 
-// ADC data from UART module via adc_values[0] and adc_values[1]
-void handleIRModule() {
-    unsigned long currentTime = millis();
-    
-    // Lấy giá trị ADC đã xử lý từ hàm handleUART() - adc_values[0] và adc_values[1]
-    uint16_t rawValue_1 = (uint16_t)getADC(1);  // adc_values[0]
-    uint16_t rawValue_2 = (uint16_t)getADC(2);  // adc_values[1]
-    
-    // Debug: Kiểm tra giá trị ADC (Commented - reduce spam)
-    // static unsigned long lastDebug = 0;
-    // if (millis() - lastDebug > 1000) {
-    //     lastDebug = millis();
-    //     Serial.printf("[IR_DEBUG] ADC_1=%d, ADC_2=%d, Change_1=%d, Change_2=%d\n", 
-    //                   rawValue_1, rawValue_2, 
-    //                   abs((int)rawValue_1 - (int)lastRawValue_1),
-    //                   abs((int)rawValue_2 - (int)lastRawValue_2));
-    // }
-    
-    // Chỉ gửi nếu thay đổi > ngưỡng
-    if (abs((int)rawValue_1 - (int)lastRawValue_1) > ADC_CHANGE_THRESHOLD) {
-        sendIRADCRaw(1, rawValue_1);
-        lastRawValue_1 = rawValue_1;
-    }
-    // sendIRThreshold(1, thresholdValue);  // Bỏ qua để giảm UDP traffic
-    
-    // Chỉ gửi nếu thay đổi > ngưỡng
-    if (abs((int)rawValue_2 - (int)lastRawValue_2) > ADC_CHANGE_THRESHOLD) {
-        sendIRADCRaw(2, rawValue_2);
-        lastRawValue_2 = rawValue_2;
-    }
-    // sendIRThreshold(2, thresholdValue);  // Bỏ qua để giảm UDP traffic
-    
-    // Cập nhật trạng thái Pin
-    bool pin1Active = (rawValue_1 > thresholdValue);
-    bool pin2Active = (rawValue_2 > thresholdValue);
-    
-    statusIR.Pin._1 = pin1Active ? 1 : 0;
-    statusIR.Pin._2 = pin2Active ? 1 : 0;
-    
-    // Biến lưu trạng thái hiện tại
-    FaceStatus currentStatus = None;
-    bool shouldSend = false;
-    
-    // ===== PHÁT HIỆN SWIPE UP: Pin 1 active -> tắt -> Pin 2 active =====
-    
-    // Phát hiện Pin 1 vừa được kích hoạt
-    if (pin1Active && !swipe1.pin1WasActive) {
-        swipe1.pin1ActiveTime = currentTime;
-        swipe1.pin1WasActive = true;
-        swipe1.pin1JustReleased = false;
-        Serial.println("[SWIPE] Pin 1 pressed");
-    }
-    
-    // Phát hiện Pin 1 vừa được thả ra
-    if (!pin1Active && swipe1.pin1WasActive) {
-        swipe1.pin1ReleaseTime = currentTime;
-        swipe1.pin1WasActive = false;
-        swipe1.pin1JustReleased = true;
-        Serial.println("[SWIPE] Pin 1 released");
-    }
-    
-    // Phát hiện Pin 2 vừa được kích hoạt
-    if (pin2Active && !swipe1.pin2WasActive) {
-        swipe1.pin2ActiveTime = currentTime;
-        swipe1.pin2WasActive = true;
-        swipe1.pin2JustReleased = false;
-        
-        // Kiểm tra swipe UP: Pin 1 vừa thả ra -> Pin 2 active trong timeout
-        if (swipe1.pin1JustReleased && 
-            (currentTime - swipe1.pin1ReleaseTime) < swipe1.swipeTimeout &&
-            !swipe1.swipeDetected) {
-            currentStatus = UP;
-            swipe1.swipeDetected = true;
-            Serial.println("[SWIPE] Detected UP (Pin 1 -> release -> Pin 2)");
-        } else {
-            Serial.println("[SWIPE] Pin 2 pressed");
-        }
-    }
-    
-    // Phát hiện Pin 2 vừa được thả ra
-    if (!pin2Active && swipe1.pin2WasActive) {
-        swipe1.pin2ReleaseTime = currentTime;
-        swipe1.pin2WasActive = false;
-        swipe1.pin2JustReleased = true;
-        Serial.println("[SWIPE] Pin 2 released");
-    }
-    
-    // ===== PHÁT HIỆN SWIPE DOWN: Pin 2 active -> tắt -> Pin 1 active =====
-    
-    // Kiểm tra swipe DOWN: Pin 2 vừa thả ra -> Pin 1 active trong timeout
-    if (pin1Active && !swipe1.pin1WasActive && 
-        swipe1.pin2JustReleased && 
-        (currentTime - swipe1.pin2ReleaseTime) < swipe1.swipeTimeout &&
-        !swipe1.swipeDetected) {
-        currentStatus = DOWN;
-        swipe1.swipeDetected = true;
-        Serial.println("[SWIPE] Detected DOWN (Pin 2 -> release -> Pin 1)");
-    }
-    
-    // ===== XỬ LÝ TRẠNG THÁI =====
-    
-    if (pin1Active || pin2Active) {
-        // Có ít nhất 1 pin active
-        if (currentStatus == None && !swipe1.swipeDetected) {
-            // Nếu chưa phát hiện swipe thì là TOUCH
-            currentStatus = TOUCH;
-        }
-        
-        statusIR.Face._1 = currentStatus;
-        
-        // Chỉ gửi nếu trạng thái thay đổi
-        if (currentStatus != swipe1.lastStatus) {
-            shouldSend = true;
-            swipe1.lastStatus = currentStatus;
-        }
-        
-    } else {
-        // Không có pin nào active
-        currentStatus = None;
-        statusIR.Face._1 = None;
-        
-        // Chỉ gửi nếu trạng thái thay đổi
-        if (swipe1.lastStatus != None) {
-            shouldSend = true;
-            swipe1.lastStatus = None;
-        }
-        
-        // Reset trạng thái swipe khi không có pin nào active
-        // Giữ trạng thái JustReleased trong timeout để phát hiện swipe
-        if (swipe1.pin1JustReleased && 
-            (currentTime - swipe1.pin1ReleaseTime) > swipe1.swipeTimeout) {
-            swipe1.pin1JustReleased = false;
-        }
-        if (swipe1.pin2JustReleased && 
-            (currentTime - swipe1.pin2ReleaseTime) > swipe1.swipeTimeout) {
-            swipe1.pin2JustReleased = false;
-        }
-        
-        swipe1.swipeDetected = false;
-    }
-    
-    // Gửi trạng thái nếu có thay đổi
-    if (shouldSend) {
-        const char* statusStr = "None";
-        switch(currentStatus) {
-            case UP: statusStr = "UP"; break;
-            case DOWN: statusStr = "DOWN"; break;
-            case TOUCH: statusStr = "TOUCH"; break;
-            case None: statusStr = "None"; break;
-        }
-        sendStatusFace(1, statusStr);
-    }
+static void setMuxAddr(uint8_t ch) {
+    digitalWrite(MUX_A0, (ch >> 0) & 1);
+    digitalWrite(MUX_A1, (ch >> 1) & 1);
+    digitalWrite(MUX_A2, (ch >> 2) & 1);
+    digitalWrite(MUX_A3, (ch >> 3) & 1);
 }
+
+void initMux() {
+    gpio_reset_pin(GPIO_NUM_3);  // free GPIO3 khỏi UART0 RX
+    pinMode(MUX_A0, OUTPUT);
+    pinMode(MUX_A1, OUTPUT);
+    pinMode(MUX_A2, OUTPUT);
+    pinMode(MUX_A3, OUTPUT);
+    setMuxAddr(0);
+    setThresholdAll(MUX_DEFAULT_THRESHOLD);
+    memset(muxDigital, 0, sizeof(muxDigital));
+    analogSetPinAttenuation(MUX_ADC1, ADC_11db);
+    analogSetPinAttenuation(MUX_ADC2, ADC_11db);
+    analogReadResolution(12);
+}
+
+// Test: bật lần lượt từng bit địa chỉ, dùng VOM đo A0-A3 trên mux board
+void testMux() {
+    Serial.println("=== MUX ADDR TEST ===");
+    const char* names[] = {"A0(GPIO3)", "A1(GPIO0)", "A2(GPIO12)", "A3(GPIO19)"};
+    for (uint8_t bit = 0; bit < 4; bit++) {
+        setMuxAddr(1 << bit);
+        Serial.printf("%s HIGH — do VOM\n", names[bit]);
+        delay(2000);
+        setMuxAddr(0);
+        Serial.printf("%s LOW\n", names[bit]);
+        delay(500);
+    }
+    Serial.println("=== DONE ===");
+}
+
+void scanMux16() {
+    static unsigned long lastDebugLog = 0;
+    bool shouldDebugLog = (millis() - lastDebugLog > 1000);  // Log mỗi 1 giây
+    
+    for (uint8_t ch = 0; ch < MUX_CHANNELS; ch++) {
+        setMuxAddr(ch);
+        delayMicroseconds(500);      // mux settle
+        analogRead(MUX_ADC1);        // dummy xả tụ
+        analogRead(MUX_ADC2);
+        delayMicroseconds(100);
+        uint32_t sum1 = 0, sum2 = 0;
+        for (int s = 0; s < 4; s++) {
+            sum1 += analogRead(MUX_ADC1);
+            sum2 += analogRead(MUX_ADC2);
+        }
+        muxData[0][ch]    = sum1 >> 2;
+        muxData[1][ch]    = sum2 >> 2;
+        
+        // ✅ Kiểm tra logic: nếu raw < threshold thì detected (digital = 1)
+        // Nếu muốn inverted, đổi < thành >
+        muxDigital[0][ch] = (muxData[0][ch] < muxThreshold[0][ch]) ? 1 : 0;
+        muxDigital[1][ch] = (muxData[1][ch] < muxThreshold[1][ch]) ? 1 : 0;
+        
+        // ✅ DEBUG: Log khi threshold cao
+        if (shouldDebugLog && ch == 0) {
+            if (muxThreshold[0][0] > 3000) {
+                Serial.printf("[SCAN_DEBUG] B0-CH%d: raw=%d thresh=%d → digital=%d (comparison: %d < %d = %s)\n",
+                    ch, muxData[0][ch], muxThreshold[0][ch], muxDigital[0][ch],
+                    muxData[0][ch], muxThreshold[0][ch],
+                    (muxData[0][ch] < muxThreshold[0][ch]) ? "TRUE→digital=1" : "FALSE→digital=0");
+            }
+        }
+    }
+    
+    if (shouldDebugLog) lastDebugLog = millis();
+}
+

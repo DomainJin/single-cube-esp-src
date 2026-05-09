@@ -45,6 +45,18 @@ static const float SCURVE_ACCEL_MAX = 200.0f;
 static const float SCURVE_JERK_UP   = 600.0f;
 static const float SCURVE_JERK_DN   = 400.0f;
 
+// Direction-reversal delay: hold at 0 for DIR_CHANGE_DELAY_MS before applying new direction
+const unsigned long DIR_CHANGE_DELAY_MS = 1000;
+
+struct RevDelay {
+  bool          active;
+  unsigned long apply_at_ms;
+  float         pending;
+};
+static RevDelay rev1 = {false, 0, 0.0f};
+static RevDelay rev2 = {false, 0, 0.0f};
+static RevDelay rev3 = {false, 0, 0.0f};
+
 // Position control state
 struct MotorPosCtrl {
   bool          active;
@@ -52,11 +64,25 @@ struct MotorPosCtrl {
   bool          forward;
   unsigned long start_ms;
   unsigned long timeout_ms;
-  float         speed_rpm;   // tốc độ tối đa của lần chạy này (cho decel zone)
+  float         speed_rpm;
+  // Cascade outer PID state
+  float         pos_integral;
+  float         pos_last_err;
+  unsigned long pos_last_t;
+  float         vel_cmd;
 };
-static MotorPosCtrl pos1 = {false, 0, true, 0, 0, 0};
-static MotorPosCtrl pos2 = {false, 0, true, 0, 0, 0};
-static MotorPosCtrl pos3 = {false, 0, true, 0, 0, 0};
+static MotorPosCtrl pos1 = {false, 0, true, 0, 0, 0, 0.0f, 0.0f, 0, 0.0f};
+static MotorPosCtrl pos2 = {false, 0, true, 0, 0, 0, 0.0f, 0.0f, 0, 0.0f};
+static MotorPosCtrl pos3 = {false, 0, true, 0, 0, 0, 0.0f, 0.0f, 0, 0.0f};
+
+// Outer position PID gains (cascade outer loop)
+const float Kp_pos = 0.08f;
+const float Ki_pos = 0.005f;
+const float Kd_pos = 0.05f;
+// Stop position mode when |count - target| <= POS_TOLERANCE (50 counts ≈ 0.05 rev)
+const long  POS_TOLERANCE = 50;
+// Snap outer PID vel_cmd to 0 when below this — prevents inner PID hunting at tiny RPM
+const float MIN_VEL_CMD   = 10.0f;
 
 //================= Motor instances ===============
 Motor m1 = {MOTOR1_EN, MOTOR1_DIR, ENC1_A, ENC1_B, M1_CH, 0, 0, 0, 0, 0, 0, 0};
@@ -255,45 +281,90 @@ static void doSCurve(float &ramp, float &accel, float target, float dt) {
   if (sign < 0.0f && ramp < target) { ramp = target; accel = 0.0f; }
 }
 
-//================= Position control check ========
-// Khi đạt target: dừng cứng ramp để tránh overshoot vị trí
+//================= Position control check (cascade outer PID) ============
 static void checkPosCtrl(MotorPosCtrl &p, Motor &m, float &target_rpm, float &ramp_rpm, float &ramp_accel) {
   if (!p.active) return;
   long c;
   noInterrupts(); c = m.count; interrupts();
-  bool done    = p.forward ? (c >= p.target_count) : (c <= p.target_count);
+  bool done    = labs(c - p.target_count) <= POS_TOLERANCE
+               || (p.forward ? (c >= p.target_count) : (c <= p.target_count));
   bool timeout = (p.timeout_ms > 0) && (millis() - p.start_ms >= p.timeout_ms);
   if (done || timeout) {
-    p.active    = false;
-    target_rpm  = 0.0f;
-    ramp_rpm    = 0.0f;
-    ramp_accel  = 0.0f;
+    p.active   = false;
+    p.vel_cmd  = 0.0f;
+    target_rpm = 0.0f;
+    // S-curve handoff: bắt đầu từ tốc độ thực tế, giảm mượt về 0
+    ramp_rpm   = m.rpmFilt;
+    ramp_accel = 0.0f;
+    // Reset inner PID để không có integral kick khi S-curve tiếp quản
+    m.integral = 0.0f;
+    m.lastErr  = 0.0f;
     if (timeout && !done)
       Serial.printf("[POS] TIMEOUT! count=%ld target=%ld - encoder khong dem duoc? Kiem tra day encoder!\n", c, p.target_count);
     else
-      Serial.printf("[POS] Done! count=%ld target=%ld\n", c, p.target_count);
+      Serial.printf("[POS] Done! count=%ld target=%ld (err=%ld)\n", c, p.target_count, c - p.target_count);
   } else {
-    // Soft decel zone: giảm target_rpm tỉ lệ khi đến gần đích.
-    // Kích thước zone = speed² / ACCEL_MAX × (CPR/60) × 2
-    // → đủ thời gian để S-curve giảm tốc hoàn toàn trước khi chạm target.
-    // Ví dụ 100 RPM, CPR=1008: zone = 100²/200 × 16.8 × 2 = 3360 counts = 3.3 vòng cơ học.
-    long DECEL_ZONE = (long)(p.speed_rpm * p.speed_rpm / SCURVE_ACCEL_MAX
-                             * ((float)ENCODER_CPR / 60.0f) * 2.0f);
-    if (DECEL_ZONE < 400) DECEL_ZONE = 400;  // tối thiểu ~0.4 vòng
+    // Outer position PID → outputs velocity command (RPM)
+    unsigned long now = millis();
+    float dt = (now - p.pos_last_t) / 1000.0f;
+    if (dt <= 0.0f) dt = 1e-3f;
 
-    long remaining = p.forward ? (p.target_count - c) : (c - p.target_count);
-    if (remaining > 0 && remaining < DECEL_ZONE) {
-      float frac    = (float)remaining / (float)DECEL_ZONE;
-      float max_rpm = p.speed_rpm * frac + 6.0f;  // min 6 RPM: đủ torque, không bị stall
-      if (p.forward  && target_rpm >  max_rpm) target_rpm =  max_rpm;
-      if (!p.forward && target_rpm < -max_rpm) target_rpm = -max_rpm;
+    float err = (float)(p.target_count - c);
+
+    // Deadband: zero vel_cmd within tolerance to prevent oscillation
+    if (fabsf(err) <= (float)POS_TOLERANCE) {
+      p.vel_cmd    = 0.0f;
+      p.pos_last_t = now;
+      return;
     }
+
+    // Anti-windup: reset integral when error changes sign
+    if ((err > 0.0f && p.pos_last_err < 0.0f) || (err < 0.0f && p.pos_last_err > 0.0f))
+      p.pos_integral = 0.0f;
+
+    p.pos_integral += err * dt;
+    if (p.pos_integral >  3000.0f) p.pos_integral =  3000.0f;
+    if (p.pos_integral < -3000.0f) p.pos_integral = -3000.0f;
+
+    float deriv = (err - p.pos_last_err) / dt;
+    float vel   = Kp_pos * err + Ki_pos * p.pos_integral + Kd_pos * deriv;
+
+    if (vel >  p.speed_rpm) vel =  p.speed_rpm;
+    if (vel < -p.speed_rpm) vel = -p.speed_rpm;
+
+    // Snap to zero if vel_cmd too small — hand off to S-curve for smooth decel
+    if (fabsf(vel) < MIN_VEL_CMD) {
+      if (fabsf(p.vel_cmd) >= MIN_VEL_CMD) {
+        // First snap this run: seed S-curve from actual speed so it decels smoothly
+        ramp_rpm   = m.rpmFilt;
+        ramp_accel = 0.0f;
+      }
+      vel = 0.0f;
+    }
+
+    p.vel_cmd      = vel;
+    p.pos_last_err = err;
+    p.pos_last_t   = now;
   }
 }
 
 //================= Main update ===================
 void update3Motors() {
   updateRPMAll();
+
+  // ── Direction-reversal delay: apply pending RPM after 1s hold ───────
+  {
+    unsigned long t = millis();
+    auto applyRev = [t](RevDelay &rd, float &trg) {
+      if (rd.active && t >= rd.apply_at_ms) {
+        trg      = rd.pending;
+        rd.active = false;
+      }
+    };
+    applyRev(rev1, m1_target_rpm);
+    applyRev(rev2, m2_target_rpm);
+    applyRev(rev3, m3_target_rpm);
+  }
 
   // ── S-Curve ramp: jerk-limited smooth velocity profile ───────────
   static unsigned long lastRampT = 0;
@@ -311,24 +382,31 @@ void update3Motors() {
   checkPosCtrl(pos2, m2, m2_target_rpm, m2_ramp_rpm, m2_ramp_accel);
   checkPosCtrl(pos3, m3, m3_target_rpm, m3_ramp_rpm, m3_ramp_accel);
 
-  // ── PID dùng ramp_rpm (smooth) ───────────────────────────────────
-  float pwm1 = stepPID(m1, m1_ramp_rpm);
-  float pwm2 = stepPID(m2, m2_ramp_rpm);
-  float pwm3 = stepPID(m3, m3_ramp_rpm);
+  // ── Drive each motor: position cascade XOR S-curve ──────────────────
+  // vel_cmd != 0: outer PID drives (position mode, above MIN_VEL_CMD)
+  // vel_cmd == 0: S-curve takes over → smooth decel to 0, no jolt
+  auto driveMotor = [&](MotorPosCtrl &p, Motor &m, float ramp_rpm) {
+    float vc  = (p.active && fabsf(p.vel_cmd) > 0.0f) ? p.vel_cmd : ramp_rpm;
+    float pwm = stepPID(m, vc);
+    applyPWM(m, (int)fabs(pwm), pwm >= 0);
+  };
 
-  applyPWM(m1, (int)fabs(pwm1), pwm1 >= 0);
-  applyPWM(m2, (int)fabs(pwm2), pwm2 >= 0);
-  applyPWM(m3, (int)fabs(pwm3), pwm3 >= 0);
+  driveMotor(pos1, m1, m1_ramp_rpm);
+  driveMotor(pos2, m2, m2_ramp_rpm);
+  driveMotor(pos3, m3, m3_ramp_rpm);
 
   static unsigned long lp = 0;
   if (millis() - lp > 500) {
     lp = millis();
     long c1, c2, c3;
     noInterrupts(); c1 = m1.count; c2 = m2.count; c3 = m3.count; interrupts();
-    Serial.printf("M1 tgt=%.1f rmp=%.1f RPM=%.1f PWM=%d enc=%ld | M2 tgt=%.1f rmp=%.1f RPM=%.1f PWM=%d enc=%ld | M3 tgt=%.1f rmp=%.1f RPM=%.1f PWM=%d enc=%ld\n",
-      m1_target_rpm, m1_ramp_rpm, m1.rpmFilt, (int)fabs(pwm1), c1,
-      m2_target_rpm, m2_ramp_rpm, m2.rpmFilt, (int)fabs(pwm2), c2,
-      m3_target_rpm, m3_ramp_rpm, m3.rpmFilt, (int)fabs(pwm3), c3);
+
+    // Log tốc độ (RPM thực tế) và vị trí (encoder count)
+    Serial.printf("[RPM ] M1=%6.1f M2=%6.1f M3=%6.1f  (RPM)\n",
+                  m1.rpmFilt, m2.rpmFilt, m3.rpmFilt);
+    Serial.printf("[POS ] M1=%7ld M2=%7ld M3=%7ld  (counts)\n",
+                  c1, c2, c3);
+
     // Gửi encoder counts về server để hiển thị trên web
     char encMsg[64];
     snprintf(encMsg, sizeof(encMsg), "ENC:%ld,%ld,%ld", c1, c2, c3);
@@ -347,14 +425,27 @@ float velocityToRPM(float velocity_cm_s) {
   return rpm;
 }
 
-// Đặt tốc độ mục tiêu cho một motor (RPM, có thể âm)
+// Đặt tốc độ mục tiêu cho một motor — tự động delay 1s khi đổi chiều
 void setMotorTargetRPM(Motor &m, float rpm) {
-  if (&m == &m1) {
-    m1_target_rpm = rpm;
-  } else if (&m == &m2) {
-    m2_target_rpm = rpm;
-  } else if (&m == &m3) {
-    m3_target_rpm = rpm;
+  float    *trg = (&m == &m1) ? &m1_target_rpm : (&m == &m2) ? &m2_target_rpm : &m3_target_rpm;
+  float    *rmp = (&m == &m1) ? &m1_ramp_rpm   : (&m == &m2) ? &m2_ramp_rpm   : &m3_ramp_rpm;
+  RevDelay *rd  = (&m == &m1) ? &rev1           : (&m == &m2) ? &rev2          : &rev3;
+
+  // Phát hiện đổi chiều: target mới ngược với tốc độ THỰC TẾ (không dùng ramp)
+  // Chỉ trigger khi motor đang thực sự quay đáng kể theo chiều ngược lại
+  bool dir_change = (rpm > 5.0f && m.rpmFilt < -5.0f)
+                 || (rpm < -5.0f && m.rpmFilt >  5.0f);
+
+  if (dir_change && !rd->active) {
+    *trg           = 0.0f;   // ép về 0 trước
+    rd->active     = true;
+    rd->apply_at_ms = millis() + DIR_CHANGE_DELAY_MS;
+    rd->pending    = rpm;
+    // Serial.printf("[DIR] Doi chieu %.1f→%.1f RPM, cho %lums\n", *rmp, rpm, DIR_CHANGE_DELAY_MS);
+  } else if (rd->active) {
+    rd->pending = rpm;       // cập nhật đích nhưng giữ đang chờ
+  } else {
+    *trg = rpm;
   }
 }
 
@@ -378,8 +469,8 @@ void omniSetVelocity(float vx, float vy, float omega) {
   m2_target_rpm = -0.5f * vx_rpm - 0.866f * vy_rpm + omega_rpm;
   m3_target_rpm = -0.5f * vx_rpm + 0.866f * vy_rpm + omega_rpm;
   
-  Serial.printf("[OMNI FUSION] Vx=%.1f Vy=%.1f ω=%.2f -> M1=%.1f M2=%.1f M3=%.1f RPM\n",
-                vx, vy, omega, m1_target_rpm, m2_target_rpm, m3_target_rpm);
+  // Serial.printf("[OMNI FUSION] Vx=%.1f Vy=%.1f ω=%.2f -> M1=%.1f M2=%.1f M3=%.1f RPM\n",
+  //               vx, vy, omega, m1_target_rpm, m2_target_rpm, m3_target_rpm);
 }
 
 // Bù trượt từ sensor fusion - KHÔNG ghi đè target, chỉ cộng thêm
@@ -428,8 +519,8 @@ void omniForward(float speed_cm_s) {
   m1_target_rpm = rpm;             // M1 tiến (100%)
   m2_target_rpm = -0.5f * rpm;     // M2 lùi (sin 30° = 0.5)
   m3_target_rpm = -0.5f * rpm;     // M3 lùi (sin 30° = 0.5)
-  Serial.printf("[OMNI] Forward %.1f cm/s -> M1=%.1f, M2=%.1f, M3=%.1f RPM\n", 
-                speed_cm_s, m1_target_rpm, m2_target_rpm, m3_target_rpm);
+  // Serial.printf("[OMNI] Forward %.1f cm/s -> M1=%.1f, M2=%.1f, M3=%.1f RPM\n",
+  //               speed_cm_s, m1_target_rpm, m2_target_rpm, m3_target_rpm);
 }
 
 // LÙI (Backward) - Vx âm, Vy = 0
@@ -438,8 +529,8 @@ void omniBackward(float speed_cm_s) {
   m1_target_rpm = -rpm;            // M1 lùi (100%)
   m2_target_rpm = 0.5f * rpm;      // M2 tiến (sin 30° = 0.5)
   m3_target_rpm = 0.5f * rpm;      // M3 tiến (sin 30° = 0.5)
-  Serial.printf("[OMNI] Backward %.1f cm/s -> M1=%.1f, M2=%.1f, M3=%.1f RPM\n", 
-                speed_cm_s, m1_target_rpm, m2_target_rpm, m3_target_rpm);
+  // Serial.printf("[OMNI] Backward %.1f cm/s -> M1=%.1f, M2=%.1f, M3=%.1f RPM\n",
+  //               speed_cm_s, m1_target_rpm, m2_target_rpm, m3_target_rpm);
 }
 
 // TRÁI (Strafe Left) - Vx = 0, Vy âm
@@ -448,8 +539,8 @@ void omniStrafeLeft(float speed_cm_s) {
   m1_target_rpm = 0;              // M1 đứng yên
   m2_target_rpm = 0.866f * rpm;   // M2 quay (sqrt(3)/2 ≈ 0.866)
   m3_target_rpm = -0.866f * rpm;  // M3 quay ngược
-  Serial.printf("[OMNI] Strafe Left %.1f cm/s -> M1=%.1f, M2=%.1f, M3=%.1f RPM\n", 
-                speed_cm_s, m1_target_rpm, m2_target_rpm, m3_target_rpm);
+  // Serial.printf("[OMNI] Strafe Left %.1f cm/s -> M1=%.1f, M2=%.1f, M3=%.1f RPM\n",
+  //               speed_cm_s, m1_target_rpm, m2_target_rpm, m3_target_rpm);
 }
 
 // PHẢI (Strafe Right) - Vx = 0, Vy dương
@@ -458,8 +549,8 @@ void omniStrafeRight(float speed_cm_s) {
   m1_target_rpm = 0;              // M1 đứng yên
   m2_target_rpm = -0.866f * rpm;  // M2 quay ngược
   m3_target_rpm = 0.866f * rpm;   // M3 quay (sqrt(3)/2 ≈ 0.866)
-  Serial.printf("[OMNI] Strafe Right %.1f cm/s -> M1=%.1f, M2=%.1f, M3=%.1f RPM\n", 
-                speed_cm_s, m1_target_rpm, m2_target_rpm, m3_target_rpm);
+  // Serial.printf("[OMNI] Strafe Right %.1f cm/s -> M1=%.1f, M2=%.1f, M3=%.1f RPM\n",
+  //               speed_cm_s, m1_target_rpm, m2_target_rpm, m3_target_rpm);
 }
 
 // XOAY TRÒN (Rotate)
@@ -492,7 +583,7 @@ void omniStop() {
   m2_target_rpm = 0;
   m3_target_rpm = 0;
   pos1.active = pos2.active = pos3.active = false;
-  Serial.println("[OMNI] Stop - All motors RPM=0");
+  // Serial.println("[OMNI] Stop - All motors RPM=0");
 }
 
 //================= Position control ==============
@@ -520,6 +611,12 @@ void motorRunRevs(Motor &m, float revs, float rpm) {
   if (p->timeout_ms < 3000)  p->timeout_ms = 3000;
   if (p->timeout_ms > 120000) p->timeout_ms = 120000;
   p->start_ms = millis();
+
+  // Init outer PID state (set last_err = initial error to avoid derivative spike)
+  p->pos_integral   = 0.0f;
+  p->pos_last_err   = (float)(p->target_count - current);
+  p->pos_last_t     = millis();
+  p->vel_cmd        = 0.0f;
 
   Serial.printf("[POS] Motor start: revs=%.2f rpm=%.1f current=%ld target=%ld timeout=%lus\n",
                 revs, *trg, current, p->target_count, p->timeout_ms / 1000);
